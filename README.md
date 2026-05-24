@@ -97,20 +97,22 @@ already an IP literal (e.g. `http://127.0.0.1/`), so a resolver-side ACL
 doesn't see those. Run the ACL against the URL beforehand to close that gap:
 
 ```rust
-use reqwest_acl::{Acl, IpAcl};
+use reqwest_acl::Acl;
 
 let acl = Acl::new().deny_local_network();
 acl.check_url(&url)?;                       // rejects IP literals
 let resp = client.get(url).send().await?;   // resolver handles domain names
 ```
 
-`check_url` is a default method on `IpAcl`, so every ACL (built-in or custom)
-gets it for free.
+`Acl::check_url` consults both host rules and IP rules. If you wrap a custom
+`IpAcl` in `AclResolver`, `AclResolver::check_url` covers the IP-literal case
+too (host rules don't apply there).
 
 ## Custom ACLs
 
-Implement `IpAcl` directly when the builder isn't expressive enough, then wrap
-in `AclResolver` to hand it to reqwest:
+Implement `IpAcl` when the builder isn't expressive enough, then wrap in
+`AclResolver` to hand it to reqwest. `IpAcl` is intentionally a pure IP
+predicate — for host-name rules, use the `Acl` builder.
 
 ```rust
 use std::net::IpAddr;
@@ -119,7 +121,7 @@ use reqwest_acl::{AclResolver, IpAcl};
 
 struct OnlyCloudflare;
 impl IpAcl for OnlyCloudflare {
-    fn allow(&self, ip: IpAddr) -> bool {
+    fn is_allowed_ip(&self, ip: IpAddr) -> bool {
         matches!(ip, IpAddr::V4(v4) if v4.octets()[..2] == [1, 1])
     }
 }
@@ -129,5 +131,5 @@ let client = reqwest::Client::builder()
     .build()?;
 ```
 
-`check_url` is inherited via the trait's default impl, so the same policy
-covers DNS results and URL literals.
+`AclResolver` provides `check_url` for the IP-literal case so the same
+policy covers both DNS results and bare-IP URLs.

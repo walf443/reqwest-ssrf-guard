@@ -59,36 +59,16 @@ pub use ipnet;
 
 /// An access-control predicate over IP addresses.
 ///
-/// Custom ACLs implement [`is_allowed_ip`](Self::is_allowed_ip);
-/// [`check_url`](Self::check_url) is provided by default and reuses
-/// `is_allowed_ip` to filter URLs whose host is an IP literal (which would
-/// otherwise bypass DNS).
+/// Custom IP-level filters implement this; [`AclResolver`] wraps any
+/// `IpAcl` and applies it to DNS lookups. For URL-level checking (including
+/// host-name rules) use [`Acl`] directly.
 pub trait IpAcl: Send + Sync + 'static {
     /// Return `true` if connecting to `ip` is permitted.
     fn is_allowed_ip(&self, ip: IpAddr) -> bool;
-
-    /// Reject `url` if its host is a literal IP denied by
-    /// [`is_allowed_ip`](Self::is_allowed_ip).
-    ///
-    /// URLs with domain hostnames are accepted here — the DNS-side filtering
-    /// (via [`Acl`] or [`AclResolver`]) handles them. Call this before
-    /// handing a user-supplied URL to reqwest to close the IP-literal gap.
-    fn check_url(&self, url: &Url) -> Result<(), AclError> {
-        let Some(host) = url.host() else { return Ok(()) };
-        let ip = match host {
-            url::Host::Ipv4(v4) => IpAddr::V4(v4),
-            url::Host::Ipv6(v6) => IpAddr::V6(v6),
-            url::Host::Domain(_) => return Ok(()),
-        };
-        if self.is_allowed_ip(ip) {
-            Ok(())
-        } else {
-            Err(AclError::DeniedIp(ip))
-        }
-    }
 }
 
-/// Returned by [`IpAcl::check_url`] when a URL is denied.
+/// Returned by [`Acl::check_url`] / [`AclResolver::check_url`] when a URL is
+/// denied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AclError {
     /// A URL whose host is a literal IP that was denied.
@@ -333,8 +313,19 @@ impl IpAcl for Acl {
         }
         self.default_allow
     }
+}
 
-    fn check_url(&self, url: &Url) -> Result<(), AclError> {
+impl Acl {
+    /// Reject `url` if its host violates the ACL.
+    ///
+    /// * Domain hosts → consult host rules ([`host_decision`](Self::host_decision)).
+    /// * IP-literal hosts → consult IP rules ([`is_allowed_ip`](IpAcl::is_allowed_ip)).
+    ///
+    /// Domain hosts that no host rule matches return `Ok` — the actual IP
+    /// filtering will happen at DNS resolution time via the [`Resolve`]
+    /// impl. Call this before handing a user-supplied URL to reqwest so that
+    /// IP-literal hosts (which bypass DNS) are still subject to the ACL.
+    pub fn check_url(&self, url: &Url) -> Result<(), AclError> {
         let Some(host) = url.host() else { return Ok(()) };
         match host {
             url::Host::Domain(name) => match self.host_decision(name) {
@@ -408,9 +399,23 @@ impl AclResolver {
         Self { acl: Arc::new(acl) }
     }
 
-    /// Forward to the wrapped ACL's [`IpAcl::check_url`].
+    /// Reject `url` if its host is a literal IP denied by the wrapped ACL.
+    ///
+    /// `AclResolver` carries an [`IpAcl`] only, so this is an IP-literal
+    /// check; domain hosts pass through and are filtered at DNS resolution
+    /// time. If you need host-name rules, use [`Acl::check_url`] instead.
     pub fn check_url(&self, url: &Url) -> Result<(), AclError> {
-        self.acl.check_url(url)
+        let Some(host) = url.host() else { return Ok(()) };
+        let ip = match host {
+            url::Host::Ipv4(v4) => IpAddr::V4(v4),
+            url::Host::Ipv6(v6) => IpAddr::V6(v6),
+            url::Host::Domain(_) => return Ok(()),
+        };
+        if self.acl.is_allowed_ip(ip) {
+            Ok(())
+        } else {
+            Err(AclError::DeniedIp(ip))
+        }
     }
 }
 
