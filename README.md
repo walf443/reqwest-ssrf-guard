@@ -49,7 +49,7 @@ Builder methods:
 | --- | --- |
 | `deny_local_network()` | Append a deny rule covering all local-network ranges. |
 | `deny_cidr(net)` / `allow_cidr(net)` | Deny / allow an entire CIDR block. For a single IP pass `/32` (v4) or `/128` (v6). |
-| `deny_when(\|ip\| ...)` / `allow_when(\|ip\| ...)` | Custom IP predicates when CIDR isn't enough. |
+| `deny_ip_when(\|ip\| ...)` / `allow_ip_when(\|ip\| ...)` | Custom IP predicates when CIDR isn't enough. |
 | `deny_host(name)` / `allow_host(name)` | Match the exact hostname (case-insensitive). |
 | `deny_host_suffix(suf)` / `allow_host_suffix(suf)` | Match by trailing-string suffix. Pass a leading dot to limit to strict subdomains (e.g. `".example.com"`). |
 | `deny_host_when(\|h\| ...)` / `allow_host_when(\|h\| ...)` | Custom host predicate. The hostname is normalized (lowercased, trailing dot stripped) before being passed in. |

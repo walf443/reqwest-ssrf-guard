@@ -201,11 +201,11 @@ impl Acl {
     /// Append a deny rule matching every address on the local network.
     /// See [`is_local_network`] for the exact set.
     pub fn deny_local_network(self) -> Self {
-        self.deny_when(is_local_network)
+        self.deny_ip_when(is_local_network)
     }
 
     /// Deny any IP for which `f` returns true.
-    pub fn deny_when<F>(mut self, f: F) -> Self
+    pub fn deny_ip_when<F>(mut self, f: F) -> Self
     where
         F: Fn(IpAddr) -> bool + Send + Sync + 'static,
     {
@@ -215,7 +215,7 @@ impl Acl {
 
     /// Allow any IP for which `f` returns true. Explicit allow overrides any
     /// matching deny rule.
-    pub fn allow_when<F>(mut self, f: F) -> Self
+    pub fn allow_ip_when<F>(mut self, f: F) -> Self
     where
         F: Fn(IpAddr) -> bool + Send + Sync + 'static,
     {
@@ -226,13 +226,13 @@ impl Acl {
     /// Deny every address inside `cidr`. For a single IP, pass `/32` (v4) or
     /// `/128` (v6).
     pub fn deny_cidr(self, cidr: IpNet) -> Self {
-        self.deny_when(move |ip| cidr.contains(&ip))
+        self.deny_ip_when(move |ip| cidr.contains(&ip))
     }
 
     /// Allow every address inside `cidr` (overrides any matching deny rule).
     /// For a single IP, pass `/32` (v4) or `/128` (v6).
     pub fn allow_cidr(self, cidr: IpNet) -> Self {
-        self.allow_when(move |ip| cidr.contains(&ip))
+        self.allow_ip_when(move |ip| cidr.contains(&ip))
     }
 
     /// Deny the exact hostname `name` (case-insensitive). Matches the host
@@ -628,8 +628,8 @@ mod tests {
     }
 
     #[test]
-    fn acl_deny_when_custom_predicate() {
-        let acl = Acl::new().deny_when(|ip| match ip {
+    fn acl_deny_ip_when_custom_predicate() {
+        let acl = Acl::new().deny_ip_when(|ip| match ip {
             IpAddr::V4(v4) => v4.octets()[0] == 198, // deny 198.x.x.x
             _ => false,
         });
