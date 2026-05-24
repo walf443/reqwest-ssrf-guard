@@ -59,14 +59,16 @@ pub use ipnet;
 
 /// An access-control predicate over IP addresses.
 ///
-/// Custom ACLs implement [`allow`](Self::allow); [`check_url`](Self::check_url)
-/// is provided by default and reuses `allow` to filter URLs whose host is an
-/// IP literal (which would otherwise bypass DNS).
+/// Custom ACLs implement [`is_allowed_ip`](Self::is_allowed_ip);
+/// [`check_url`](Self::check_url) is provided by default and reuses
+/// `is_allowed_ip` to filter URLs whose host is an IP literal (which would
+/// otherwise bypass DNS).
 pub trait IpAcl: Send + Sync + 'static {
     /// Return `true` if connecting to `ip` is permitted.
-    fn allow(&self, ip: IpAddr) -> bool;
+    fn is_allowed_ip(&self, ip: IpAddr) -> bool;
 
-    /// Reject `url` if its host is a literal IP denied by [`allow`](Self::allow).
+    /// Reject `url` if its host is a literal IP denied by
+    /// [`is_allowed_ip`](Self::is_allowed_ip).
     ///
     /// URLs with domain hostnames are accepted here — the DNS-side filtering
     /// (via [`Acl`] or [`AclResolver`]) handles them. Call this before
@@ -78,7 +80,7 @@ pub trait IpAcl: Send + Sync + 'static {
             url::Host::Ipv6(v6) => IpAddr::V6(v6),
             url::Host::Domain(_) => return Ok(()),
         };
-        if self.allow(ip) {
+        if self.is_allowed_ip(ip) {
             Ok(())
         } else {
             Err(AclError::DeniedIp(ip))
@@ -141,9 +143,9 @@ impl std::error::Error for AclError {}
 /// let acl = Acl::new()
 ///     .deny_local_network()
 ///     .allow_cidr("192.168.1.100/32".parse().unwrap());
-/// assert!(!acl.allow("10.0.0.1".parse().unwrap()));      // denied
-/// assert!( acl.allow("192.168.1.100".parse().unwrap())); // exception wins
-/// assert!( acl.allow("8.8.8.8".parse().unwrap()));       // public — default allow
+/// assert!(!acl.is_allowed_ip("10.0.0.1".parse().unwrap()));      // denied
+/// assert!( acl.is_allowed_ip("192.168.1.100".parse().unwrap())); // exception wins
+/// assert!( acl.is_allowed_ip("8.8.8.8".parse().unwrap()));       // public — default allow
 /// ```
 #[derive(Clone)]
 pub struct Acl {
@@ -313,7 +315,7 @@ impl Acl {
 }
 
 impl IpAcl for Acl {
-    fn allow(&self, ip: IpAddr) -> bool {
+    fn is_allowed_ip(&self, ip: IpAddr) -> bool {
         let mut explicit_allow = false;
         let mut explicit_deny = false;
         for rule in &self.rules {
@@ -341,7 +343,7 @@ impl IpAcl for Acl {
             },
             url::Host::Ipv4(v4) => {
                 let ip = IpAddr::V4(v4);
-                if self.allow(ip) {
+                if self.is_allowed_ip(ip) {
                     Ok(())
                 } else {
                     Err(AclError::DeniedIp(ip))
@@ -349,7 +351,7 @@ impl IpAcl for Acl {
             }
             url::Host::Ipv6(v6) => {
                 let ip = IpAddr::V6(v6);
-                if self.allow(ip) {
+                if self.is_allowed_ip(ip) {
                     Ok(())
                 } else {
                     Err(AclError::DeniedIp(ip))
@@ -431,7 +433,7 @@ async fn resolve_with_inner(
         .await
         .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
 
-    let allowed: Vec<SocketAddr> = iter.filter(|sa| acl.allow(sa.ip())).collect();
+    let allowed: Vec<SocketAddr> = iter.filter(|sa| acl.is_allowed_ip(sa.ip())).collect();
 
     if allowed.is_empty() {
         return Err(Box::new(io::Error::new(
@@ -554,16 +556,16 @@ mod tests {
     #[test]
     fn acl_default_is_allow_all() {
         let acl = Acl::new();
-        assert!(acl.allow(v4("10.0.0.1")));
-        assert!(acl.allow(v4("8.8.8.8")));
+        assert!(acl.is_allowed_ip(v4("10.0.0.1")));
+        assert!(acl.is_allowed_ip(v4("8.8.8.8")));
     }
 
     #[test]
     fn acl_deny_local_network() {
         let acl = Acl::new().deny_local_network();
-        assert!(!acl.allow(v4("10.0.0.1")));
-        assert!(!acl.allow(v4("127.0.0.1")));
-        assert!(acl.allow(v4("8.8.8.8")));
+        assert!(!acl.is_allowed_ip(v4("10.0.0.1")));
+        assert!(!acl.is_allowed_ip(v4("127.0.0.1")));
+        assert!(acl.is_allowed_ip(v4("8.8.8.8")));
     }
 
     #[test]
@@ -571,9 +573,9 @@ mod tests {
         let acl = Acl::new()
             .deny_local_network()
             .allow_cidr(cidr("192.168.1.100/32"));
-        assert!(!acl.allow(v4("192.168.0.1"))); // still denied
-        assert!(acl.allow(v4("192.168.1.100"))); // exception
-        assert!(acl.allow(v4("8.8.8.8"))); // default allow
+        assert!(!acl.is_allowed_ip(v4("192.168.0.1"))); // still denied
+        assert!(acl.is_allowed_ip(v4("192.168.1.100"))); // exception
+        assert!(acl.is_allowed_ip(v4("8.8.8.8"))); // default allow
     }
 
     #[test]
@@ -586,8 +588,8 @@ mod tests {
             .deny_local_network()
             .allow_cidr(cidr("192.168.1.100/32"));
         for acl in [&acl1, &acl2] {
-            assert!(acl.allow(v4("192.168.1.100")));
-            assert!(!acl.allow(v4("192.168.0.1")));
+            assert!(acl.is_allowed_ip(v4("192.168.1.100")));
+            assert!(!acl.is_allowed_ip(v4("192.168.0.1")));
         }
     }
 
@@ -597,10 +599,10 @@ mod tests {
             .default_deny()
             .allow_cidr(cidr("1.1.1.1/32"))
             .allow_cidr(cidr("8.8.8.8/32"));
-        assert!(acl.allow(v4("1.1.1.1")));
-        assert!(acl.allow(v4("8.8.8.8")));
-        assert!(!acl.allow(v4("9.9.9.9")));
-        assert!(!acl.allow(v4("10.0.0.1")));
+        assert!(acl.is_allowed_ip(v4("1.1.1.1")));
+        assert!(acl.is_allowed_ip(v4("8.8.8.8")));
+        assert!(!acl.is_allowed_ip(v4("9.9.9.9")));
+        assert!(!acl.is_allowed_ip(v4("10.0.0.1")));
     }
 
     #[test]
@@ -609,10 +611,10 @@ mod tests {
         let acl = Acl::new()
             .default_deny()
             .allow_cidr(cidr("192.0.2.0/24"));
-        assert!(acl.allow(v4("192.0.2.0")));
-        assert!(acl.allow(v4("192.0.2.42")));
-        assert!(acl.allow(v4("192.0.2.255")));
-        assert!(!acl.allow(v4("192.0.3.0")));
+        assert!(acl.is_allowed_ip(v4("192.0.2.0")));
+        assert!(acl.is_allowed_ip(v4("192.0.2.42")));
+        assert!(acl.is_allowed_ip(v4("192.0.2.255")));
+        assert!(!acl.is_allowed_ip(v4("192.0.3.0")));
     }
 
     #[test]
@@ -620,9 +622,9 @@ mod tests {
         let acl = Acl::new()
             .default_deny()
             .allow_cidr(cidr("2001:db8::/32"));
-        assert!(acl.allow(v6("2001:db8::1")));
-        assert!(acl.allow(v6("2001:db8:ffff::1")));
-        assert!(!acl.allow(v6("2001:db9::1")));
+        assert!(acl.is_allowed_ip(v6("2001:db8::1")));
+        assert!(acl.is_allowed_ip(v6("2001:db8:ffff::1")));
+        assert!(!acl.is_allowed_ip(v6("2001:db9::1")));
     }
 
     #[test]
@@ -631,8 +633,8 @@ mod tests {
             IpAddr::V4(v4) => v4.octets()[0] == 198, // deny 198.x.x.x
             _ => false,
         });
-        assert!(!acl.allow(v4("198.51.100.1")));
-        assert!(acl.allow(v4("8.8.8.8")));
+        assert!(!acl.is_allowed_ip(v4("198.51.100.1")));
+        assert!(acl.is_allowed_ip(v4("8.8.8.8")));
     }
 
     // --- check_url --------------------------------------------------------
