@@ -335,6 +335,29 @@ impl Acl {
             }
         }
     }
+
+    /// Return a [`reqwest::redirect::Policy`] that validates every redirect
+    /// hop against this ACL.
+    ///
+    /// Each redirect target is run through [`validate_url`](Self::validate_url);
+    /// a violation fails the request with the [`AclError`] wrapped as a
+    /// redirect error. Allowed targets fall through to
+    /// [`reqwest::redirect::Policy::default`], so the regular hop-limit (10
+    /// at the time of writing — whatever reqwest's current default is)
+    /// still applies.
+    ///
+    /// Combine with [`Resolve`] (for DNS hops) and the optional
+    /// `middleware` integration (for the initial URL) to cover all three
+    /// places a request URL can land on a denied host.
+    pub fn redirect_policy(&self) -> reqwest::redirect::Policy {
+        let acl = self.clone();
+        reqwest::redirect::Policy::custom(move |attempt| {
+            if let Err(e) = acl.validate_url(attempt.url()) {
+                return attempt.error(e);
+            }
+            reqwest::redirect::Policy::default().redirect(attempt)
+        })
+    }
 }
 
 impl Resolve for Acl {
@@ -720,6 +743,18 @@ mod tests {
         assert!(acl
             .validate_url(&Url::parse("http://other.example.com/").unwrap())
             .is_ok());
+    }
+
+    #[test]
+    fn redirect_policy_returns_a_usable_policy() {
+        // Compile-only: ensure the return type is what reqwest's builder
+        // expects.
+        let acl = Acl::new().deny_local_network();
+        let _policy: reqwest::redirect::Policy = acl.redirect_policy();
+        let _client = reqwest::Client::builder()
+            .redirect(acl.redirect_policy())
+            .build()
+            .unwrap();
     }
 }
 

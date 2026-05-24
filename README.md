@@ -90,27 +90,51 @@ Semantics (same "explicit allow wins" model as the IP layer):
 The hostname is lowercased and any trailing dot is stripped before
 matching, so `Example.COM.` and `example.com` are equivalent.
 
-## URL pre-check (IP-literal hosts)
+## Where the ACL gets a chance to fire
 
-reqwest's underlying `HttpConnector` skips DNS entirely when a URL's host is
-already an IP literal (e.g. `http://127.0.0.1/`), so a resolver-side ACL
-doesn't see those. Run the ACL against the URL beforehand to close that gap:
+Three different layers see different parts of the request lifecycle, and
+each one closes a gap the others can't. The same `Acl` plugs into all
+three:
+
+| Layer | Covers | Misses |
+| --- | --- | --- |
+| **Resolver** (`dns_resolver(Arc::new(acl.clone()))`) | DNS lookups — initial request and any redirect to a domain | URLs / redirects whose host is an IP literal (DNS isn't consulted) |
+| **`validate_url`** / **`middleware` feature** | The initial request URL, including IP-literal hosts | Anything reqwest decides to follow after that |
+| **Redirect policy** (`redirect(acl.redirect_policy())`) | Every redirect hop, including IP-literal targets | The initial URL itself |
+
+Wire all three to cover every host the request can touch:
 
 ```rust
+use std::sync::Arc;
 use reqwest_acl::Acl;
 
+let acl = Acl::new()
+    .deny_local_network()
+    .deny_host_suffix(".internal.corp");
+
+let client = reqwest::Client::builder()
+    .dns_resolver(Arc::new(acl.clone()))   // domain hops (initial + redirects)
+    .redirect(acl.redirect_policy())       // every redirect URL, incl. IP literals
+    .build()?;
+
+// Then either call validate_url manually before each .send(),
+// or enable the `middleware` feature and let it run automatically.
+```
+
+### Manual URL pre-check
+
+```rust
 let acl = Acl::new().deny_local_network();
 acl.validate_url(&url)?;                       // rejects IP literals
-let resp = client.get(url).send().await?;   // resolver handles domain names
+let resp = client.get(url).send().await?;
 ```
 
 `Acl::validate_url` consults both host rules and IP rules.
 
-## `reqwest-middleware` integration (feature: `middleware`)
+### `reqwest-middleware` integration (feature: `middleware`)
 
-If you'd rather have `validate_url` run automatically before every request,
-enable the `middleware` feature and pass the same `Acl` to a
-`reqwest_middleware::ClientBuilder`:
+Enable the `middleware` feature to have `validate_url` run automatically
+before every outgoing request:
 
 ```toml
 [dependencies]
@@ -122,17 +146,14 @@ use std::sync::Arc;
 use reqwest_acl::Acl;
 use reqwest_middleware::ClientBuilder;
 
-let acl = Acl::new()
-    .deny_local_network()
-    .deny_host_suffix(".internal.corp");
+let acl = Acl::new().deny_local_network();
 
 let inner = reqwest::Client::builder()
-    .dns_resolver(Arc::new(acl.clone()))   // resolver-side: filters DNS results
+    .dns_resolver(Arc::new(acl.clone()))
+    .redirect(acl.redirect_policy())
     .build()?;
 
-let client = ClientBuilder::new(inner)
-    .with(acl)                              // middleware-side: validates URLs
-    .build();
+let client = ClientBuilder::new(inner).with(acl).build();
 ```
 
 A failed `validate_url` surfaces as
