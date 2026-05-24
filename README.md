@@ -100,11 +100,11 @@ doesn't see those. Run the ACL against the URL beforehand to close that gap:
 use reqwest_acl::Acl;
 
 let acl = Acl::new().deny_local_network();
-acl.check_url(&url)?;                       // rejects IP literals
+acl.validate_url(&url)?;                       // rejects IP literals
 let resp = client.get(url).send().await?;   // resolver handles domain names
 ```
 
-`Acl::check_url` consults both host rules and IP rules.
+`Acl::validate_url` consults both host rules and IP rules.
 
 ## Custom logic
 

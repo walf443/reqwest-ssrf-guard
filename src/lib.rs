@@ -53,7 +53,7 @@ use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 pub use ipnet;
 
-/// Returned by [`Acl::check_url`] when a URL is denied.
+/// Returned by [`Acl::validate_url`] when a URL is denied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AclError {
     /// A URL whose host is a literal IP that was denied.
@@ -310,7 +310,7 @@ impl Acl {
     /// filtering will happen at DNS resolution time via the [`Resolve`]
     /// impl. Call this before handing a user-supplied URL to reqwest so that
     /// IP-literal hosts (which bypass DNS) are still subject to the ACL.
-    pub fn check_url(&self, url: &Url) -> Result<(), AclError> {
+    pub fn validate_url(&self, url: &Url) -> Result<(), AclError> {
         let Some(host) = url.host() else { return Ok(()) };
         match host {
             url::Host::Domain(name) => match self.host_decision(name) {
@@ -568,48 +568,48 @@ mod tests {
         assert!(acl.is_allowed_ip(v4("8.8.8.8")));
     }
 
-    // --- check_url --------------------------------------------------------
+    // --- validate_url --------------------------------------------------------
 
     fn deny_local() -> Acl {
         Acl::new().deny_local_network()
     }
 
     #[test]
-    fn check_url_rejects_ipv4_literal_local() {
+    fn validate_url_rejects_ipv4_literal_local() {
         let url = Url::parse("http://127.0.0.1/admin").unwrap();
-        let err = deny_local().check_url(&url).unwrap_err();
+        let err = deny_local().validate_url(&url).unwrap_err();
         assert_eq!(err, AclError::DeniedIp(v4("127.0.0.1")));
     }
 
     #[test]
-    fn check_url_rejects_ipv6_literal_local() {
+    fn validate_url_rejects_ipv6_literal_local() {
         let url = Url::parse("http://[::1]/").unwrap();
-        let err = deny_local().check_url(&url).unwrap_err();
+        let err = deny_local().validate_url(&url).unwrap_err();
         assert_eq!(err, AclError::DeniedIp(v6("::1")));
     }
 
     #[test]
-    fn check_url_allows_public_literal() {
+    fn validate_url_allows_public_literal() {
         let url = Url::parse("http://1.1.1.1/").unwrap();
-        assert!(deny_local().check_url(&url).is_ok());
+        assert!(deny_local().validate_url(&url).is_ok());
     }
 
     #[test]
-    fn check_url_defers_domain_names_to_resolver() {
+    fn validate_url_defers_domain_names_to_resolver() {
         let url = Url::parse("http://localhost/").unwrap();
-        assert!(deny_local().check_url(&url).is_ok());
+        assert!(deny_local().validate_url(&url).is_ok());
         let url = Url::parse("http://example.com/").unwrap();
-        assert!(deny_local().check_url(&url).is_ok());
+        assert!(deny_local().validate_url(&url).is_ok());
     }
 
     #[test]
-    fn check_url_via_acl_with_exception() {
+    fn validate_url_via_acl_with_exception() {
         let acl = Acl::new()
             .deny_local_network()
             .allow_cidr(cidr("192.168.1.100/32"));
         // Exception is honoured at URL-check time too
-        assert!(acl.check_url(&Url::parse("http://192.168.1.100/").unwrap()).is_ok());
-        assert!(acl.check_url(&Url::parse("http://192.168.1.101/").unwrap()).is_err());
+        assert!(acl.validate_url(&Url::parse("http://192.168.1.100/").unwrap()).is_ok());
+        assert!(acl.validate_url(&Url::parse("http://192.168.1.101/").unwrap()).is_err());
     }
 
     // --- host rules ------------------------------------------------------
@@ -657,29 +657,29 @@ mod tests {
     }
 
     #[test]
-    fn check_url_host_deny_rejects_domain_url() {
+    fn validate_url_host_deny_rejects_domain_url() {
         let acl = Acl::new().deny_host("evil.example");
         let err = acl
-            .check_url(&Url::parse("http://EVIL.example/path").unwrap())
+            .validate_url(&Url::parse("http://EVIL.example/path").unwrap())
             .unwrap_err();
         assert_eq!(err, AclError::DeniedHost("evil.example".into()));
     }
 
     #[test]
-    fn check_url_host_allow_overrides_default_deny_for_domain() {
+    fn validate_url_host_allow_overrides_default_deny_for_domain() {
         // default_deny only affects the IP layer; domain URLs short-circuit on
-        // host rules in check_url and otherwise pass (resolver handles them).
+        // host rules in validate_url and otherwise pass (resolver handles them).
         let acl = Acl::new()
             .default_deny()
             .allow_host("api.example.com");
         // domain with explicit allow — passes
         assert!(acl
-            .check_url(&Url::parse("http://api.example.com/").unwrap())
+            .validate_url(&Url::parse("http://api.example.com/").unwrap())
             .is_ok());
-        // domain with no host rule match — check_url still says ok (resolver
+        // domain with no host rule match — validate_url still says ok (resolver
         // would then deny per default_deny at IP layer)
         assert!(acl
-            .check_url(&Url::parse("http://other.example.com/").unwrap())
+            .validate_url(&Url::parse("http://other.example.com/").unwrap())
             .is_ok());
     }
 }
