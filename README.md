@@ -104,32 +104,26 @@ acl.check_url(&url)?;                       // rejects IP literals
 let resp = client.get(url).send().await?;   // resolver handles domain names
 ```
 
-`Acl::check_url` consults both host rules and IP rules. If you wrap a custom
-`IpAcl` in `AclResolver`, `AclResolver::check_url` covers the IP-literal case
-too (host rules don't apply there).
+`Acl::check_url` consults both host rules and IP rules.
 
-## Custom ACLs
+## Custom logic
 
-Implement `IpAcl` when the builder isn't expressive enough, then wrap in
-`AclResolver` to hand it to reqwest. `IpAcl` is intentionally a pure IP
-predicate — for host-name rules, use the `Acl` builder.
+When the built-in presets aren't enough, drop into a closure via
+`deny_ip_when` / `allow_ip_when` / `deny_host_when` / `allow_host_when`. The
+closures can capture any state you like:
 
 ```rust
+use std::collections::HashSet;
 use std::net::IpAddr;
-use std::sync::Arc;
-use reqwest_acl::{AclResolver, IpAcl};
+use std::sync::{Arc, RwLock};
+use reqwest_acl::Acl;
 
-struct OnlyCloudflare;
-impl IpAcl for OnlyCloudflare {
-    fn is_allowed_ip(&self, ip: IpAddr) -> bool {
-        matches!(ip, IpAddr::V4(v4) if v4.octets()[..2] == [1, 1])
-    }
-}
+let dynamic_blocklist: Arc<RwLock<HashSet<IpAddr>>> = Arc::default();
 
-let client = reqwest::Client::builder()
-    .dns_resolver(Arc::new(AclResolver::new(OnlyCloudflare)))
-    .build()?;
+let acl = Acl::new()
+    .deny_local_network()
+    .deny_ip_when({
+        let bl = dynamic_blocklist.clone();
+        move |ip| bl.read().unwrap().contains(&ip)
+    });
 ```
-
-`AclResolver` provides `check_url` for the IP-literal case so the same
-policy covers both DNS results and bare-IP URLs.

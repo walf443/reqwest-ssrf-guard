@@ -53,22 +53,7 @@ use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 pub use ipnet;
 
-// ---------------------------------------------------------------------------
-// IpAcl
-// ---------------------------------------------------------------------------
-
-/// An access-control predicate over IP addresses.
-///
-/// Custom IP-level filters implement this; [`AclResolver`] wraps any
-/// `IpAcl` and applies it to DNS lookups. For URL-level checking (including
-/// host-name rules) use [`Acl`] directly.
-pub trait IpAcl: Send + Sync + 'static {
-    /// Return `true` if connecting to `ip` is permitted.
-    fn is_allowed_ip(&self, ip: IpAddr) -> bool;
-}
-
-/// Returned by [`Acl::check_url`] / [`AclResolver::check_url`] when a URL is
-/// denied.
+/// Returned by [`Acl::check_url`] when a URL is denied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AclError {
     /// A URL whose host is a literal IP that was denied.
@@ -119,7 +104,7 @@ impl std::error::Error for AclError {}
 /// Rule order does not matter within a layer.
 ///
 /// ```
-/// use reqwest_acl::{Acl, IpAcl};
+/// use reqwest_acl::Acl;
 /// let acl = Acl::new()
 ///     .deny_local_network()
 ///     .allow_cidr("192.168.1.100/32".parse().unwrap());
@@ -294,8 +279,10 @@ impl Acl {
     }
 }
 
-impl IpAcl for Acl {
-    fn is_allowed_ip(&self, ip: IpAddr) -> bool {
+impl Acl {
+    /// Return `true` if connecting to `ip` is permitted by the IP-layer
+    /// rules (host rules are not consulted here).
+    pub fn is_allowed_ip(&self, ip: IpAddr) -> bool {
         let mut explicit_allow = false;
         let mut explicit_deny = false;
         for rule in &self.rules {
@@ -313,13 +300,11 @@ impl IpAcl for Acl {
         }
         self.default_allow
     }
-}
 
-impl Acl {
     /// Reject `url` if its host violates the ACL.
     ///
     /// * Domain hosts → consult host rules ([`host_decision`](Self::host_decision)).
-    /// * IP-literal hosts → consult IP rules ([`is_allowed_ip`](IpAcl::is_allowed_ip)).
+    /// * IP-literal hosts → consult IP rules ([`is_allowed_ip`](Self::is_allowed_ip)).
     ///
     /// Domain hosts that no host rule matches return `Ok` — the actual IP
     /// filtering will happen at DNS resolution time via the [`Resolve`]
@@ -356,7 +341,7 @@ impl Resolve for Acl {
     fn resolve(&self, name: Name) -> Resolving {
         let host = name.as_str().to_owned();
         let host_decision = self.host_decision(&host);
-        let acl: Arc<dyn IpAcl> = Arc::new(self.clone());
+        let acl = self.clone();
         Box::pin(async move {
             match host_decision {
                 HostDecision::Deny => Err(Box::new(io::Error::new(
@@ -373,82 +358,23 @@ impl Resolve for Acl {
                     Ok(addrs)
                 }
                 HostDecision::Continue => {
-                    // Fall through to IP-layer filtering via resolve_with.
-                    resolve_with_inner(host, acl).await
+                    let iter = tokio::net::lookup_host((host.as_str(), 0))
+                        .await
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
+                    let allowed: Vec<SocketAddr> =
+                        iter.filter(|sa| acl.is_allowed_ip(sa.ip())).collect();
+                    if allowed.is_empty() {
+                        return Err(Box::new(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            format!("all resolved addresses for {host} were denied by ACL"),
+                        )) as Box<dyn std::error::Error + Send + Sync>);
+                    }
+                    let addrs: Addrs = Box::new(allowed.into_iter());
+                    Ok(addrs)
                 }
             }
         })
     }
-}
-
-// ---------------------------------------------------------------------------
-// AclResolver — wrap any IpAcl as reqwest::dns::Resolve
-// ---------------------------------------------------------------------------
-
-/// Adapter that turns any [`IpAcl`] into a [`reqwest::dns::Resolve`].
-///
-/// Resolves the hostname via the system resolver (`tokio::net::lookup_host`),
-/// then filters the results through the ACL. If every resolved address is
-/// rejected, the request fails with `PermissionDenied`.
-pub struct AclResolver {
-    acl: Arc<dyn IpAcl>,
-}
-
-impl AclResolver {
-    pub fn new<A: IpAcl>(acl: A) -> Self {
-        Self { acl: Arc::new(acl) }
-    }
-
-    /// Reject `url` if its host is a literal IP denied by the wrapped ACL.
-    ///
-    /// `AclResolver` carries an [`IpAcl`] only, so this is an IP-literal
-    /// check; domain hosts pass through and are filtered at DNS resolution
-    /// time. If you need host-name rules, use [`Acl::check_url`] instead.
-    pub fn check_url(&self, url: &Url) -> Result<(), AclError> {
-        let Some(host) = url.host() else { return Ok(()) };
-        let ip = match host {
-            url::Host::Ipv4(v4) => IpAddr::V4(v4),
-            url::Host::Ipv6(v6) => IpAddr::V6(v6),
-            url::Host::Domain(_) => return Ok(()),
-        };
-        if self.acl.is_allowed_ip(ip) {
-            Ok(())
-        } else {
-            Err(AclError::DeniedIp(ip))
-        }
-    }
-}
-
-impl Resolve for AclResolver {
-    fn resolve(&self, name: Name) -> Resolving {
-        resolve_with(name, self.acl.clone())
-    }
-}
-
-fn resolve_with(name: Name, acl: Arc<dyn IpAcl>) -> Resolving {
-    let host = name.as_str().to_owned();
-    Box::pin(resolve_with_inner(host, acl))
-}
-
-async fn resolve_with_inner(
-    host: String,
-    acl: Arc<dyn IpAcl>,
-) -> Result<Addrs, Box<dyn std::error::Error + Send + Sync>> {
-    let iter = tokio::net::lookup_host((host.as_str(), 0))
-        .await
-        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)?;
-
-    let allowed: Vec<SocketAddr> = iter.filter(|sa| acl.is_allowed_ip(sa.ip())).collect();
-
-    if allowed.is_empty() {
-        return Err(Box::new(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("all resolved addresses for {host} were denied by ACL"),
-        )) as Box<dyn std::error::Error + Send + Sync>);
-    }
-
-    let addrs: Addrs = Box::new(allowed.into_iter());
-    Ok(addrs)
 }
 
 // ---------------------------------------------------------------------------
@@ -684,13 +610,6 @@ mod tests {
         // Exception is honoured at URL-check time too
         assert!(acl.check_url(&Url::parse("http://192.168.1.100/").unwrap()).is_ok());
         assert!(acl.check_url(&Url::parse("http://192.168.1.101/").unwrap()).is_err());
-    }
-
-    #[test]
-    fn check_url_via_resolver() {
-        let resolver = AclResolver::new(Acl::new().deny_local_network());
-        assert!(resolver.check_url(&Url::parse("http://10.0.0.1/").unwrap()).is_err());
-        assert!(resolver.check_url(&Url::parse("http://example.com/").unwrap()).is_ok());
     }
 
     // --- host rules ------------------------------------------------------
