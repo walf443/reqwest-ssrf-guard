@@ -336,6 +336,37 @@ impl Acl {
         }
     }
 
+    /// Apply this ACL to a [`reqwest::ClientBuilder`] — installs the DNS
+    /// resolver and the redirect policy in one shot.
+    ///
+    /// This is the recommended way to wire the ACL into a client: calling
+    /// just `dns_resolver` or just `redirect` leaves a gap (IP-literal URLs
+    /// or IP-literal redirect targets, respectively). Use this to set both
+    /// at once, then chain any further reqwest settings:
+    ///
+    /// ```no_run
+    /// # use std::time::Duration;
+    /// # use reqwest_acl::Acl;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let acl = Acl::new().deny_local_network();
+    /// let client = acl
+    ///     .configure(reqwest::Client::builder())
+    ///     .timeout(Duration::from_secs(30))
+    ///     .build()?;
+    /// # let _ = client;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// `validate_url` on the initial request URL is not covered here —
+    /// either call it manually before each request, or enable the
+    /// `middleware` feature and apply [`configure_middleware`](Self::configure_middleware).
+    pub fn configure(&self, builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+        builder
+            .dns_resolver(std::sync::Arc::new(self.clone()))
+            .redirect(self.redirect_policy())
+    }
+
     /// Return a [`reqwest::redirect::Policy`] that validates every redirect
     /// hop against this ACL.
     ///
@@ -465,6 +496,34 @@ pub fn is_local_network(ip: IpAddr) -> bool {
 ///
 /// Validation failures are surfaced as `reqwest_middleware::Error::Middleware`
 /// wrapping the [`AclError`].
+#[cfg(feature = "middleware")]
+impl Acl {
+    /// Register this ACL as a middleware on a
+    /// [`reqwest_middleware::ClientBuilder`].
+    ///
+    /// Available with the `middleware` feature. Pair with
+    /// [`configure`](Self::configure) on the underlying reqwest client:
+    ///
+    /// ```no_run
+    /// # use reqwest_acl::Acl;
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let acl = Acl::new().deny_local_network();
+    /// let inner = acl.configure(reqwest::Client::builder()).build()?;
+    /// let client = acl
+    ///     .configure_middleware(reqwest_middleware::ClientBuilder::new(inner))
+    ///     .build();
+    /// # let _ = client;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn configure_middleware(
+        &self,
+        builder: reqwest_middleware::ClientBuilder,
+    ) -> reqwest_middleware::ClientBuilder {
+        builder.with(self.clone())
+    }
+}
+
 #[cfg(feature = "middleware")]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
@@ -756,18 +815,30 @@ mod tests {
             .build()
             .unwrap();
     }
+
+    #[test]
+    fn configure_wires_resolver_and_redirect_policy() {
+        // Compile-only: the returned builder must still be usable.
+        let acl = Acl::new().deny_local_network();
+        let _client = acl
+            .configure(reqwest::Client::builder())
+            .timeout(std::time::Duration::from_secs(5))
+            .build()
+            .unwrap();
+    }
 }
 
 #[cfg(all(test, feature = "middleware"))]
 mod middleware_tests {
     use crate::Acl;
 
-    /// Compile-only check that `Acl` is accepted by `ClientBuilder::with`.
+    /// Compile-only check that `Acl` is accepted by `ClientBuilder::with`
+    /// via `configure_middleware`.
     #[test]
-    fn acl_satisfies_middleware_trait() {
+    fn configure_middleware_returns_a_builder() {
         let acl = Acl::new().deny_local_network();
-        let _client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
-            .with(acl)
+        let _client = acl
+            .configure_middleware(reqwest_middleware::ClientBuilder::new(reqwest::Client::new()))
             .build();
     }
 
@@ -776,8 +847,8 @@ mod middleware_tests {
     #[tokio::test]
     async fn middleware_rejects_local_network_ip_literal() {
         let acl = Acl::new().deny_local_network();
-        let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
-            .with(acl)
+        let client = acl
+            .configure_middleware(reqwest_middleware::ClientBuilder::new(reqwest::Client::new()))
             .build();
         let err = client.get("http://127.0.0.1/").send().await.unwrap_err();
         assert!(err.is_middleware(), "expected middleware error, got: {err}");

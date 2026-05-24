@@ -90,36 +90,35 @@ Semantics (same "explicit allow wins" model as the IP layer):
 The hostname is lowercased and any trailing dot is stripped before
 matching, so `Example.COM.` and `example.com` are equivalent.
 
-## Where the ACL gets a chance to fire
+## Wiring the ACL into a client
 
-Three different layers see different parts of the request lifecycle, and
-each one closes a gap the others can't. The same `Acl` plugs into all
-three:
+There are three places where a request can land on a denied host, and each
+of them needs the ACL plugged in separately:
 
 | Layer | Covers | Misses |
 | --- | --- | --- |
-| **Resolver** (`dns_resolver(Arc::new(acl.clone()))`) | DNS lookups — initial request and any redirect to a domain | URLs / redirects whose host is an IP literal (DNS isn't consulted) |
-| **`validate_url`** / **`middleware` feature** | The initial request URL, including IP-literal hosts | Anything reqwest decides to follow after that |
-| **Redirect policy** (`redirect(acl.redirect_policy())`) | Every redirect hop, including IP-literal targets | The initial URL itself |
+| **Resolver** (`dns_resolver`) | DNS lookups — initial request and any redirect to a domain | URLs / redirects whose host is an IP literal (DNS isn't consulted) |
+| **Redirect policy** (`redirect`) | Every redirect hop, including IP-literal targets | The initial URL itself |
+| **`validate_url`** (or `middleware` feature) | The initial request URL, including IP-literal hosts | Anything reqwest decides to follow after that |
 
-Wire all three to cover every host the request can touch:
+Use [`Acl::configure`] to install the first two in one shot:
 
 ```rust
-use std::sync::Arc;
+use std::time::Duration;
 use reqwest_acl::Acl;
 
 let acl = Acl::new()
     .deny_local_network()
     .deny_host_suffix(".internal.corp");
 
-let client = reqwest::Client::builder()
-    .dns_resolver(Arc::new(acl.clone()))   // domain hops (initial + redirects)
-    .redirect(acl.redirect_policy())       // every redirect URL, incl. IP literals
+let client = acl
+    .configure(reqwest::Client::builder())   // resolver + redirect policy
+    .timeout(Duration::from_secs(30))        // any other reqwest settings work
     .build()?;
-
-// Then either call validate_url manually before each .send(),
-// or enable the `middleware` feature and let it run automatically.
 ```
+
+That leaves the initial URL — handle it with either a manual `validate_url`
+call or the `middleware` feature.
 
 ### Manual URL pre-check
 
@@ -142,18 +141,15 @@ reqwest-acl = { version = "0.1", features = ["middleware"] }
 ```
 
 ```rust
-use std::sync::Arc;
 use reqwest_acl::Acl;
 use reqwest_middleware::ClientBuilder;
 
 let acl = Acl::new().deny_local_network();
 
-let inner = reqwest::Client::builder()
-    .dns_resolver(Arc::new(acl.clone()))
-    .redirect(acl.redirect_policy())
-    .build()?;
-
-let client = ClientBuilder::new(inner).with(acl).build();
+let inner = acl.configure(reqwest::Client::builder()).build()?;
+let client = acl
+    .configure_middleware(ClientBuilder::new(inner))
+    .build();
 ```
 
 A failed `validate_url` surfaces as
