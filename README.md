@@ -19,9 +19,12 @@ let client = reqwest::Client::builder()
 ```
 
 `deny_local_network()` rejects RFC1918 private ranges, loopback, link-local,
-IPv6 ULA / link-local, IPv4-mapped variants of the same, and a few related
-ranges. If every address returned for a hostname is denied, the request fails
-with `PermissionDenied`.
+shared / CGNAT (`100.64.0.0/10`, RFC6598), IPv6 ULA / link-local, IPv4-mapped
+variants of the same, and a few related ranges. This blocks the cloud
+metadata endpoints used by AWS / GCP / Azure / DigitalOcean / Oracle /
+Hetzner / IBM (all at `169.254.169.254`) and Alibaba Cloud
+(`100.100.100.200`). If every address returned for a hostname is denied,
+the request fails with `PermissionDenied`.
 
 ## Customizing
 

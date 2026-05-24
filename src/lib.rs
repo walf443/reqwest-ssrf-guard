@@ -438,18 +438,28 @@ impl Resolve for Acl {
 /// Returns `true` if `ip` belongs to a local / non-routable network.
 ///
 /// Concretely: IPv4 private ranges (RFC1918), loopback (`127.0.0.0/8`),
-/// link-local (`169.254.0.0/16`), `0.0.0.0/8`, broadcast; IPv6 loopback
-/// (`::1`), unspecified (`::`), unique local (`fc00::/7`), link-local
-/// (`fe80::/10`), and IPv4-mapped variants of the above.
+/// link-local (`169.254.0.0/16`), shared / CGNAT (`100.64.0.0/10`, RFC6598
+/// — covers Alibaba Cloud's `100.100.100.200` metadata endpoint),
+/// `0.0.0.0/8`, broadcast; IPv6 loopback (`::1`), unspecified (`::`),
+/// unique local (`fc00::/7`), link-local (`fe80::/10`), and IPv4-mapped
+/// variants of the above.
+///
+/// AWS / GCP / Azure / DigitalOcean / Oracle / Hetzner / IBM Cloud
+/// metadata endpoints all live in `169.254.169.254` (link-local) and are
+/// therefore covered. AWS IPv6 metadata (`fd00:ec2::254`) falls inside the
+/// IPv6 ULA range and is covered too.
 pub fn is_local_network(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
+            let oct = v4.octets();
             v4.is_private()
                 || v4.is_loopback()
                 || v4.is_link_local()
                 || v4.is_broadcast()
                 // 0.0.0.0/8 ("this network")
-                || v4.octets()[0] == 0
+                || oct[0] == 0
+                // 100.64.0.0/10 — RFC6598 shared address space / CGNAT
+                || (oct[0] == 100 && (oct[1] & 0xc0) == 0x40)
         }
         IpAddr::V6(v6) => {
             if v6.is_loopback() || v6.is_unspecified() {
@@ -580,6 +590,36 @@ mod tests {
         for ip in ["1.1.1.1", "8.8.8.8", "172.15.0.1", "172.32.0.1", "192.0.2.1"] {
             assert!(!is_local_network(v4(ip)), "{ip} should be allowed");
         }
+    }
+
+    #[test]
+    fn denies_cgnat_range() {
+        // 100.64.0.0/10 — RFC6598 shared address space.
+        // Includes Alibaba Cloud's `100.100.100.200` metadata endpoint.
+        for ip in [
+            "100.64.0.0",
+            "100.64.0.1",
+            "100.100.100.200",
+            "100.127.255.255",
+        ] {
+            assert!(is_local_network(v4(ip)), "{ip} should be denied (CGNAT)");
+        }
+    }
+
+    #[test]
+    fn allows_addresses_adjacent_to_cgnat() {
+        // Guard against an over-broad mask catching neighbours of 100.64.0.0/10.
+        for ip in ["100.63.255.255", "100.128.0.0", "99.255.255.255"] {
+            assert!(!is_local_network(v4(ip)), "{ip} should be allowed");
+        }
+    }
+
+    #[test]
+    fn denies_cloud_metadata_endpoints() {
+        // Sanity check for the most common cloud metadata IPs.
+        assert!(is_local_network(v4("169.254.169.254")), "AWS/GCP/Azure IMDS");
+        assert!(is_local_network(v4("100.100.100.200")), "Alibaba IMDS");
+        assert!(is_local_network(v6("fd00:ec2::254")), "AWS IPv6 IMDS");
     }
 
     #[test]
