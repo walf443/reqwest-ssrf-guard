@@ -21,7 +21,7 @@ async-trait = { version = "0.1", optional = true }
 http = { version = "1", optional = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 
 [package.metadata.docs.rs]
