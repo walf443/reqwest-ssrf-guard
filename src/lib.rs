@@ -420,6 +420,45 @@ pub fn is_local_network(ip: IpAddr) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// reqwest-middleware integration (feature-gated)
+// ---------------------------------------------------------------------------
+
+/// Use [`Acl`] directly as a [`reqwest_middleware::Middleware`] so that
+/// every outgoing request is filtered through [`Acl::validate_url`].
+///
+/// Enable the `middleware` feature, then:
+///
+/// ```ignore
+/// use std::sync::Arc;
+/// use reqwest_acl::Acl;
+/// use reqwest_middleware::ClientBuilder;
+///
+/// let acl = Acl::new().deny_local_network();
+/// let inner = reqwest::Client::builder()
+///     .dns_resolver(Arc::new(acl.clone()))
+///     .build()?;
+/// let client = ClientBuilder::new(inner).with(acl).build();
+/// ```
+///
+/// Validation failures are surfaced as `reqwest_middleware::Error::Middleware`
+/// wrapping the [`AclError`].
+#[cfg(feature = "middleware")]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+impl reqwest_middleware::Middleware for Acl {
+    async fn handle(
+        &self,
+        req: reqwest::Request,
+        extensions: &mut http::Extensions,
+        next: reqwest_middleware::Next<'_>,
+    ) -> reqwest_middleware::Result<reqwest::Response> {
+        self.validate_url(req.url())
+            .map_err(reqwest_middleware::Error::middleware)?;
+        next.run(req, extensions).await
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -683,3 +722,30 @@ mod tests {
             .is_ok());
     }
 }
+
+#[cfg(all(test, feature = "middleware"))]
+mod middleware_tests {
+    use crate::Acl;
+
+    /// Compile-only check that `Acl` is accepted by `ClientBuilder::with`.
+    #[test]
+    fn acl_satisfies_middleware_trait() {
+        let acl = Acl::new().deny_local_network();
+        let _client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+            .with(acl)
+            .build();
+    }
+
+    /// Verify that a denied URL surfaces as an `Error::Middleware` with the
+    /// wrapped `AclError`, without actually hitting the network.
+    #[tokio::test]
+    async fn middleware_rejects_local_network_ip_literal() {
+        let acl = Acl::new().deny_local_network();
+        let client = reqwest_middleware::ClientBuilder::new(reqwest::Client::new())
+            .with(acl)
+            .build();
+        let err = client.get("http://127.0.0.1/").send().await.unwrap_err();
+        assert!(err.is_middleware(), "expected middleware error, got: {err}");
+    }
+}
+

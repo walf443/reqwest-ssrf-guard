@@ -106,6 +106,39 @@ let resp = client.get(url).send().await?;   // resolver handles domain names
 
 `Acl::validate_url` consults both host rules and IP rules.
 
+## `reqwest-middleware` integration (feature: `middleware`)
+
+If you'd rather have `validate_url` run automatically before every request,
+enable the `middleware` feature and pass the same `Acl` to a
+`reqwest_middleware::ClientBuilder`:
+
+```toml
+[dependencies]
+reqwest-acl = { version = "0.1", features = ["middleware"] }
+```
+
+```rust
+use std::sync::Arc;
+use reqwest_acl::Acl;
+use reqwest_middleware::ClientBuilder;
+
+let acl = Acl::new()
+    .deny_local_network()
+    .deny_host_suffix(".internal.corp");
+
+let inner = reqwest::Client::builder()
+    .dns_resolver(Arc::new(acl.clone()))   // resolver-side: filters DNS results
+    .build()?;
+
+let client = ClientBuilder::new(inner)
+    .with(acl)                              // middleware-side: validates URLs
+    .build();
+```
+
+A failed `validate_url` surfaces as
+`reqwest_middleware::Error::Middleware(_)` wrapping the `AclError`. Use
+`error.is_middleware()` to distinguish it from network errors.
+
 ## Custom logic
 
 When the built-in presets aren't enough, drop into a closure via
