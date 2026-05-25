@@ -310,7 +310,9 @@ impl Acl {
     /// impl. Call this before handing a user-supplied URL to reqwest so that
     /// IP-literal hosts (which bypass DNS) are still subject to the ACL.
     pub fn validate_url(&self, url: &Url) -> Result<(), AclError> {
-        let Some(host) = url.host() else { return Ok(()) };
+        let Some(host) = url.host() else {
+            return Ok(());
+        };
         match host {
             url::Host::Domain(name) => match self.host_decision(name) {
                 HostDecision::Allow | HostDecision::Continue => Ok(()),
@@ -400,7 +402,8 @@ impl Resolve for Acl {
                 HostDecision::Deny => Err(Box::new(io::Error::new(
                     io::ErrorKind::PermissionDenied,
                     format!("host {host} is denied by ACL"),
-                )) as Box<dyn std::error::Error + Send + Sync>),
+                ))
+                    as Box<dyn std::error::Error + Send + Sync>),
                 HostDecision::Allow => {
                     // Trusted host: resolve and return everything without IP filtering.
                     let resolved: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
@@ -420,7 +423,8 @@ impl Resolve for Acl {
                         return Err(Box::new(io::Error::new(
                             io::ErrorKind::PermissionDenied,
                             format!("all resolved addresses for {host} were denied by ACL"),
-                        )) as Box<dyn std::error::Error + Send + Sync>);
+                        ))
+                            as Box<dyn std::error::Error + Send + Sync>);
                     }
                     let addrs: Addrs = Box::new(allowed.into_iter());
                     Ok(addrs)
@@ -572,21 +576,39 @@ mod tests {
 
     #[test]
     fn denies_ipv4_private_ranges() {
-        for ip in ["10.0.0.1", "10.255.255.254", "172.16.0.1", "172.31.255.254", "192.168.0.1"] {
+        for ip in [
+            "10.0.0.1",
+            "10.255.255.254",
+            "172.16.0.1",
+            "172.31.255.254",
+            "192.168.0.1",
+        ] {
             assert!(is_local_network(v4(ip)), "{ip} should be denied");
         }
     }
 
     #[test]
     fn denies_ipv4_loopback_and_linklocal_and_zero_and_broadcast() {
-        for ip in ["127.0.0.1", "169.254.1.1", "0.0.0.0", "0.1.2.3", "255.255.255.255"] {
+        for ip in [
+            "127.0.0.1",
+            "169.254.1.1",
+            "0.0.0.0",
+            "0.1.2.3",
+            "255.255.255.255",
+        ] {
             assert!(is_local_network(v4(ip)), "{ip} should be denied");
         }
     }
 
     #[test]
     fn allows_public_ipv4() {
-        for ip in ["1.1.1.1", "8.8.8.8", "172.15.0.1", "172.32.0.1", "192.0.2.1"] {
+        for ip in [
+            "1.1.1.1",
+            "8.8.8.8",
+            "172.15.0.1",
+            "172.32.0.1",
+            "192.0.2.1",
+        ] {
             assert!(!is_local_network(v4(ip)), "{ip} should be allowed");
         }
     }
@@ -616,7 +638,10 @@ mod tests {
     #[test]
     fn denies_cloud_metadata_endpoints() {
         // Sanity check for the most common cloud metadata IPs.
-        assert!(is_local_network(v4("169.254.169.254")), "AWS/GCP/Azure IMDS");
+        assert!(
+            is_local_network(v4("169.254.169.254")),
+            "AWS/GCP/Azure IMDS"
+        );
         assert!(is_local_network(v4("100.100.100.200")), "Alibaba IMDS");
         assert!(is_local_network(v6("fd00:ec2::254")), "AWS IPv6 IMDS");
     }
@@ -699,9 +724,7 @@ mod tests {
     #[test]
     fn acl_cidr_range() {
         // /24 allows the whole prefix
-        let acl = Acl::new()
-            .default_deny()
-            .allow_cidr(cidr("192.0.2.0/24"));
+        let acl = Acl::new().default_deny().allow_cidr(cidr("192.0.2.0/24"));
         assert!(acl.is_allowed_ip(v4("192.0.2.0")));
         assert!(acl.is_allowed_ip(v4("192.0.2.42")));
         assert!(acl.is_allowed_ip(v4("192.0.2.255")));
@@ -710,9 +733,7 @@ mod tests {
 
     #[test]
     fn acl_cidr_ipv6() {
-        let acl = Acl::new()
-            .default_deny()
-            .allow_cidr(cidr("2001:db8::/32"));
+        let acl = Acl::new().default_deny().allow_cidr(cidr("2001:db8::/32"));
         assert!(acl.is_allowed_ip(v6("2001:db8::1")));
         assert!(acl.is_allowed_ip(v6("2001:db8:ffff::1")));
         assert!(!acl.is_allowed_ip(v6("2001:db9::1")));
@@ -768,8 +789,14 @@ mod tests {
             .deny_local_network()
             .allow_cidr(cidr("192.168.1.100/32"));
         // Exception is honoured at URL-check time too
-        assert!(acl.validate_url(&Url::parse("http://192.168.1.100/").unwrap()).is_ok());
-        assert!(acl.validate_url(&Url::parse("http://192.168.1.101/").unwrap()).is_err());
+        assert!(
+            acl.validate_url(&Url::parse("http://192.168.1.100/").unwrap())
+                .is_ok()
+        );
+        assert!(
+            acl.validate_url(&Url::parse("http://192.168.1.101/").unwrap())
+                .is_err()
+        );
     }
 
     // --- host rules ------------------------------------------------------
@@ -788,14 +815,20 @@ mod tests {
         // trailing dot is stripped
         assert_eq!(acl.host_decision("evil.example."), HostDecision::Deny);
         // not a substring match
-        assert_eq!(acl.host_decision("not-evil.example"), HostDecision::Continue);
+        assert_eq!(
+            acl.host_decision("not-evil.example"),
+            HostDecision::Continue
+        );
     }
 
     #[test]
     fn host_decision_suffix_match() {
         let acl = Acl::new().deny_host_suffix(".internal.corp");
         assert_eq!(acl.host_decision("api.internal.corp"), HostDecision::Deny);
-        assert_eq!(acl.host_decision("deep.api.internal.corp"), HostDecision::Deny);
+        assert_eq!(
+            acl.host_decision("deep.api.internal.corp"),
+            HostDecision::Deny
+        );
         // leading dot guards against bare-string false matches
         assert_eq!(acl.host_decision("internal.corp"), HostDecision::Continue);
         assert_eq!(acl.host_decision("public.example"), HostDecision::Continue);
@@ -829,18 +862,18 @@ mod tests {
     fn validate_url_host_allow_overrides_default_deny_for_domain() {
         // default_deny only affects the IP layer; domain URLs short-circuit on
         // host rules in validate_url and otherwise pass (resolver handles them).
-        let acl = Acl::new()
-            .default_deny()
-            .allow_host("api.example.com");
+        let acl = Acl::new().default_deny().allow_host("api.example.com");
         // domain with explicit allow — passes
-        assert!(acl
-            .validate_url(&Url::parse("http://api.example.com/").unwrap())
-            .is_ok());
+        assert!(
+            acl.validate_url(&Url::parse("http://api.example.com/").unwrap())
+                .is_ok()
+        );
         // domain with no host rule match — validate_url still says ok (resolver
         // would then deny per default_deny at IP layer)
-        assert!(acl
-            .validate_url(&Url::parse("http://other.example.com/").unwrap())
-            .is_ok());
+        assert!(
+            acl.validate_url(&Url::parse("http://other.example.com/").unwrap())
+                .is_ok()
+        );
     }
 
     #[test]
@@ -877,7 +910,9 @@ mod middleware_tests {
     fn configure_middleware_returns_a_builder() {
         let acl = Acl::new().deny_local_network();
         let _client = acl
-            .configure_middleware(reqwest_middleware::ClientBuilder::new(reqwest::Client::new()))
+            .configure_middleware(reqwest_middleware::ClientBuilder::new(
+                reqwest::Client::new(),
+            ))
             .build();
     }
 
@@ -887,10 +922,11 @@ mod middleware_tests {
     async fn middleware_rejects_local_network_ip_literal() {
         let acl = Acl::new().deny_local_network();
         let client = acl
-            .configure_middleware(reqwest_middleware::ClientBuilder::new(reqwest::Client::new()))
+            .configure_middleware(reqwest_middleware::ClientBuilder::new(
+                reqwest::Client::new(),
+            ))
             .build();
         let err = client.get("http://127.0.0.1/").send().await.unwrap_err();
         assert!(err.is_middleware(), "expected middleware error, got: {err}");
     }
 }
-

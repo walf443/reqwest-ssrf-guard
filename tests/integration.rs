@@ -34,9 +34,7 @@ async fn spawn_server(response: Arc<String>) -> SocketAddr {
 }
 
 fn http_200() -> Arc<String> {
-    Arc::new(
-        "HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello".to_owned(),
-    )
+    Arc::new("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello".to_owned())
 }
 
 fn http_302(location: &str) -> Arc<String> {
@@ -143,9 +141,7 @@ mod with_middleware {
             .deny_local_network()
             .allow_cidr("127.0.0.1/32".parse().unwrap());
         let inner = acl.configure(reqwest::Client::builder()).build().unwrap();
-        let client = acl
-            .configure_middleware(ClientBuilder::new(inner))
-            .build();
+        let client = acl.configure_middleware(ClientBuilder::new(inner)).build();
 
         let url = format!("http://127.0.0.1:{}/", addr.port());
         let resp = client.get(&url).send().await.unwrap();
@@ -159,9 +155,7 @@ mod with_middleware {
 
         let acl = Acl::new().deny_local_network();
         let inner = acl.configure(reqwest::Client::builder()).build().unwrap();
-        let client = acl
-            .configure_middleware(ClientBuilder::new(inner))
-            .build();
+        let client = acl.configure_middleware(ClientBuilder::new(inner)).build();
 
         let url = format!("http://127.0.0.1:{}/", addr.port());
         let err = client.get(&url).send().await.unwrap_err();
