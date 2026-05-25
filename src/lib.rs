@@ -1,6 +1,5 @@
-//! IP-based ACL for [`reqwest`] — mitigate SSRF / DNS rebinding by filtering
-//! the addresses returned from DNS and rejecting URLs whose host is an IP
-//! literal denied by the ACL.
+//! Mitigate SSRF / DNS rebinding in [`reqwest`] by filtering DNS lookups,
+//! redirect targets, and URL literals through an IP / host ACL.
 //!
 //! # Quick start
 //!
@@ -9,7 +8,7 @@
 //!
 //! ```no_run
 //! use std::sync::Arc;
-//! use reqwest_acl::Acl;
+//! use reqwest_ssrf_guard::Acl;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let client = reqwest::Client::builder()
@@ -28,7 +27,7 @@
 //!
 //! ```no_run
 //! use std::sync::Arc;
-//! use reqwest_acl::Acl;
+//! use reqwest_ssrf_guard::Acl;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let acl = Acl::new()
@@ -104,7 +103,7 @@ impl std::error::Error for AclError {}
 /// Rule order does not matter within a layer.
 ///
 /// ```
-/// use reqwest_acl::Acl;
+/// use reqwest_ssrf_guard::Acl;
 /// let acl = Acl::new()
 ///     .deny_local_network()
 ///     .allow_cidr("192.168.1.100/32".parse().unwrap());
@@ -346,7 +345,7 @@ impl Acl {
     ///
     /// ```no_run
     /// # use std::time::Duration;
-    /// # use reqwest_acl::Acl;
+    /// # use reqwest_ssrf_guard::Acl;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let acl = Acl::new().deny_local_network();
     /// let client = acl
@@ -494,7 +493,7 @@ pub fn is_local_network(ip: IpAddr) -> bool {
 ///
 /// ```ignore
 /// use std::sync::Arc;
-/// use reqwest_acl::Acl;
+/// use reqwest_ssrf_guard::Acl;
 /// use reqwest_middleware::ClientBuilder;
 ///
 /// let acl = Acl::new().deny_local_network();
@@ -515,7 +514,7 @@ impl Acl {
     /// [`configure`](Self::configure) on the underlying reqwest client:
     ///
     /// ```no_run
-    /// # use reqwest_acl::Acl;
+    /// # use reqwest_ssrf_guard::Acl;
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// let acl = Acl::new().deny_local_network();
     /// let inner = acl.configure(reqwest::Client::builder()).build()?;

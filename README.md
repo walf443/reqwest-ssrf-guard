@@ -1,8 +1,8 @@
-# reqwest-acl
+# reqwest-ssrf-guard
 
-IP-based ACL for [`reqwest`](https://docs.rs/reqwest) — mitigate SSRF and DNS
-rebinding by filtering the addresses returned from DNS and rejecting URLs
-whose host is an IP literal denied by the ACL.
+Mitigate SSRF and DNS rebinding in [`reqwest`](https://docs.rs/reqwest) by
+filtering DNS lookups, redirect targets, and URL literals through an IP /
+host ACL.
 
 ## Quick start
 
@@ -11,7 +11,7 @@ straight to reqwest:
 
 ```rust
 use std::sync::Arc;
-use reqwest_acl::Acl;
+use reqwest_ssrf_guard::Acl;
 
 let client = reqwest::Client::builder()
     .dns_resolver(Arc::new(Acl::new().deny_local_network()))
@@ -34,7 +34,7 @@ specific IP" reads naturally:
 
 ```rust
 use std::sync::Arc;
-use reqwest_acl::Acl;
+use reqwest_ssrf_guard::Acl;
 
 let acl = Acl::new()
     .deny_local_network()
@@ -108,7 +108,7 @@ Use [`Acl::configure`] to install the first two in one shot:
 
 ```rust
 use std::time::Duration;
-use reqwest_acl::Acl;
+use reqwest_ssrf_guard::Acl;
 
 let acl = Acl::new()
     .deny_local_network()
@@ -140,11 +140,11 @@ before every outgoing request:
 
 ```toml
 [dependencies]
-reqwest-acl = { version = "0.1", features = ["middleware"] }
+reqwest-ssrf-guard = { version = "0.1", features = ["middleware"] }
 ```
 
 ```rust
-use reqwest_acl::Acl;
+use reqwest_ssrf_guard::Acl;
 use reqwest_middleware::ClientBuilder;
 
 let acl = Acl::new().deny_local_network();
@@ -169,7 +169,7 @@ closures can capture any state you like:
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::{Arc, RwLock};
-use reqwest_acl::Acl;
+use reqwest_ssrf_guard::Acl;
 
 let dynamic_blocklist: Arc<RwLock<HashSet<IpAddr>>> = Arc::default();
 

@@ -1,8 +1,8 @@
 [package]
-name = "reqwest-acl"
+name = "reqwest-ssrf-guard"
 version = "0.1.0"
 edition = "2024"
-description = "IP-based ACL for reqwest — mitigate SSRF and DNS rebinding by filtering DNS results and URL literals"
+description = "Mitigate SSRF and DNS rebinding in reqwest by filtering DNS results, redirects, and URL literals"
 keywords = ["reqwest", "ssrf", "dns-rebinding", "acl", "security"]
 categories = ["web-programming", "network-programming"]
 license = "MIT OR Apache-2.0"

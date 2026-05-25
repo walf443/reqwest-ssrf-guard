@@ -5,7 +5,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use reqwest_acl::Acl;
+use reqwest_ssrf_guard::Acl;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
