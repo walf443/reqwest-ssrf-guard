@@ -1040,6 +1040,16 @@ mod tests {
         s.parse().unwrap()
     }
 
+    /// Assert that a boxed resolver error is an `io::Error` carrying
+    /// `PermissionDenied` — checks the deny *semantics* rather than coupling
+    /// the test to the exact message wording.
+    fn assert_permission_denied(err: &(dyn std::error::Error + Send + Sync + 'static)) {
+        let io_err = err
+            .downcast_ref::<io::Error>()
+            .unwrap_or_else(|| panic!("expected io::Error, got: {err}"));
+        assert_eq!(io_err.kind(), io::ErrorKind::PermissionDenied);
+    }
+
     #[tokio::test]
     async fn resolver_denies_host_rule_without_dns() {
         // A host-denied name must be rejected by the resolver before any DNS
@@ -1049,7 +1059,7 @@ mod tests {
             Err(e) => e,
             Ok(_) => panic!("expected denied host to error"),
         };
-        assert_eq!(err.to_string(), "host evil.example is denied by ACL");
+        assert_permission_denied(err.as_ref());
     }
 
     #[tokio::test]
@@ -1062,11 +1072,7 @@ mod tests {
             Err(e) => e,
             Ok(_) => panic!("expected all-denied resolution to error"),
         };
-        assert!(
-            err.to_string()
-                .contains("all resolved addresses for localhost were denied"),
-            "unexpected error: {err}"
-        );
+        assert_permission_denied(err.as_ref());
     }
 
     #[tokio::test]
