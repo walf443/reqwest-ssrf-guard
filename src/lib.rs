@@ -444,8 +444,10 @@ impl Resolve for Acl {
 /// link-local (`169.254.0.0/16`), shared / CGNAT (`100.64.0.0/10`, RFC6598
 /// — covers Alibaba Cloud's `100.100.100.200` metadata endpoint),
 /// `0.0.0.0/8`, broadcast; IPv6 loopback (`::1`), unspecified (`::`),
-/// unique local (`fc00::/7`), link-local (`fe80::/10`), and IPv4-mapped
-/// variants of the above.
+/// unique local (`fc00::/7`), link-local (`fe80::/10`), IPv4-mapped
+/// (`::ffff:a.b.c.d`) variants of the above, and IPv4 addresses embedded in
+/// NAT64 (`64:ff9b::/96`, RFC6052) or 6to4 (`2002::/16`, RFC3056) addresses
+/// (e.g. `64:ff9b::7f00:1` resolves to `127.0.0.1`).
 ///
 /// AWS / GCP / Azure / DigitalOcean / Oracle / Hetzner / IBM Cloud
 /// metadata endpoints all live in `169.254.169.254` (link-local) and are
@@ -481,9 +483,51 @@ pub fn is_local_network(ip: IpAddr) -> bool {
             if let Some(v4) = v6.to_ipv4_mapped() {
                 return is_local_network(IpAddr::V4(v4));
             }
+            // NAT64 well-known prefix (64:ff9b::/96, RFC6052) and 6to4
+            // (2002::/16, RFC3056) embed an IPv4 address that can be used to
+            // reach an internal v4 target via a translating gateway. Extract
+            // it and re-check against the v4 rules.
+            if let Some(v4) = embedded_ipv4(segs) {
+                return is_local_network(IpAddr::V4(v4));
+            }
             false
         }
     }
+}
+
+/// Extracts an IPv4 address embedded in an IPv6 address via the NAT64
+/// well-known prefix (`64:ff9b::/96`, RFC6052) or 6to4 (`2002::/16`, RFC3056).
+///
+/// These transition mechanisms carry an IPv4 destination inside the IPv6
+/// address, so e.g. `64:ff9b::7f00:1` maps to `127.0.0.1` and `2002:7f00:1::`
+/// maps to `127.0.0.1` — both classic SSRF bypasses on networks where a
+/// translating gateway is present. Returns `None` for any other address.
+fn embedded_ipv4(segs: [u16; 8]) -> Option<std::net::Ipv4Addr> {
+    // NAT64 well-known prefix 64:ff9b::/96 — IPv4 is the last 32 bits.
+    if segs[0] == 0x0064
+        && segs[1] == 0xff9b
+        && segs[2] == 0
+        && segs[3] == 0
+        && segs[4] == 0
+        && segs[5] == 0
+    {
+        return Some(std::net::Ipv4Addr::new(
+            (segs[6] >> 8) as u8,
+            (segs[6] & 0xff) as u8,
+            (segs[7] >> 8) as u8,
+            (segs[7] & 0xff) as u8,
+        ));
+    }
+    // 6to4 2002::/16 — IPv4 is bits 16..48 (segs[1] and segs[2]).
+    if segs[0] == 0x2002 {
+        return Some(std::net::Ipv4Addr::new(
+            (segs[1] >> 8) as u8,
+            (segs[1] & 0xff) as u8,
+            (segs[2] >> 8) as u8,
+            (segs[2] & 0xff) as u8,
+        ));
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -665,6 +709,32 @@ mod tests {
         assert!(is_local_network(v6("::ffff:127.0.0.1")));
         assert!(is_local_network(v6("::ffff:192.168.1.1")));
         assert!(!is_local_network(v6("::ffff:8.8.8.8")));
+    }
+
+    #[test]
+    fn denies_nat64_embedded_local() {
+        // 64:ff9b::/96 well-known prefix with a local IPv4 embedded.
+        assert!(is_local_network(v6("64:ff9b::7f00:1")), "127.0.0.1");
+        assert!(is_local_network(v6("64:ff9b::a00:1")), "10.0.0.1");
+        assert!(
+            is_local_network(v6("64:ff9b::a9fe:a9fe")),
+            "169.254.169.254 IMDS"
+        );
+        // A NAT64-embedded public address must still be allowed.
+        assert!(!is_local_network(v6("64:ff9b::808:808")), "8.8.8.8");
+    }
+
+    #[test]
+    fn denies_6to4_embedded_local() {
+        // 2002::/16 with a local IPv4 embedded in bits 16..48.
+        assert!(is_local_network(v6("2002:7f00:1::")), "127.0.0.1");
+        assert!(is_local_network(v6("2002:a00:1::")), "10.0.0.1");
+        assert!(
+            is_local_network(v6("2002:a9fe:a9fe::")),
+            "169.254.169.254 IMDS"
+        );
+        // A 6to4-embedded public address must still be allowed.
+        assert!(!is_local_network(v6("2002:808:808::")), "8.8.8.8");
     }
 
     // --- Acl builder semantics -------------------------------------------
