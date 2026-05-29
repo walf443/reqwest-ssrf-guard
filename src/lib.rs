@@ -52,13 +52,33 @@ use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 
 pub use ipnet;
 
-/// Returned by [`Acl::validate_url`] when a URL is denied.
+/// Why the ACL rejected a connection.
+///
+/// Returned directly by [`Acl::validate_url`], and — because the [`Resolve`]
+/// impl must hand reqwest an [`io::Error`] — also carried as the payload of
+/// the `PermissionDenied` errors the resolver produces. Consumers can recover
+/// it to tell an ACL block apart from a genuine network `PermissionDenied`:
+///
+/// ```
+/// # use std::io;
+/// # use reqwest_ssrf_guard::AclError;
+/// fn acl_reason<'a>(
+///     err: &'a (dyn std::error::Error + Send + Sync + 'static),
+/// ) -> Option<&'a AclError> {
+///     err.downcast_ref::<io::Error>()?
+///         .get_ref()?
+///         .downcast_ref::<AclError>()
+/// }
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AclError {
     /// A URL whose host is a literal IP that was denied.
     DeniedIp(IpAddr),
-    /// A URL whose host is a domain name that was denied.
+    /// A URL whose host is a domain name denied by a host rule (before DNS).
     DeniedHost(String),
+    /// Every address the host resolved to was denied by the IP-layer rules.
+    /// Produced at DNS-resolution time, never by [`Acl::validate_url`].
+    AllAddressesDenied(String),
 }
 
 impl std::fmt::Display for AclError {
@@ -66,6 +86,9 @@ impl std::fmt::Display for AclError {
         match self {
             Self::DeniedIp(ip) => write!(f, "address {ip} is denied by ACL"),
             Self::DeniedHost(h) => write!(f, "host {h} is denied by ACL"),
+            Self::AllAddressesDenied(h) => {
+                write!(f, "all resolved addresses for {h} were denied by ACL")
+            }
         }
     }
 }
@@ -421,7 +444,7 @@ impl Resolve for Acl {
             match host_decision {
                 HostDecision::Deny => Err(Box::new(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    format!("host {host} is denied by ACL"),
+                    AclError::DeniedHost(normalize_host(&host)),
                 ))
                     as Box<dyn std::error::Error + Send + Sync>),
                 HostDecision::Allow => {
@@ -442,7 +465,7 @@ impl Resolve for Acl {
                     if allowed.is_empty() {
                         return Err(Box::new(io::Error::new(
                             io::ErrorKind::PermissionDenied,
-                            format!("all resolved addresses for {host} were denied by ACL"),
+                            AclError::AllAddressesDenied(normalize_host(&host)),
                         ))
                             as Box<dyn std::error::Error + Send + Sync>);
                     }
@@ -1040,14 +1063,21 @@ mod tests {
         s.parse().unwrap()
     }
 
-    /// Assert that a boxed resolver error is an `io::Error` carrying
-    /// `PermissionDenied` — checks the deny *semantics* rather than coupling
-    /// the test to the exact message wording.
-    fn assert_permission_denied(err: &(dyn std::error::Error + Send + Sync + 'static)) {
+    /// Recover the `AclError` a resolver error carries, asserting along the
+    /// way that it is a `PermissionDenied` `io::Error` with an `AclError`
+    /// payload — i.e. the exact path a consumer uses to tell an ACL block
+    /// apart from a genuine network error. Checks semantics + type, not the
+    /// message wording.
+    fn acl_error_of(err: &(dyn std::error::Error + Send + Sync + 'static)) -> AclError {
         let io_err = err
             .downcast_ref::<io::Error>()
             .unwrap_or_else(|| panic!("expected io::Error, got: {err}"));
         assert_eq!(io_err.kind(), io::ErrorKind::PermissionDenied);
+        io_err
+            .get_ref()
+            .and_then(|inner| inner.downcast_ref::<AclError>())
+            .unwrap_or_else(|| panic!("expected AclError payload, got: {io_err}"))
+            .clone()
     }
 
     #[tokio::test]
@@ -1059,7 +1089,10 @@ mod tests {
             Err(e) => e,
             Ok(_) => panic!("expected denied host to error"),
         };
-        assert_permission_denied(err.as_ref());
+        assert_eq!(
+            acl_error_of(err.as_ref()),
+            AclError::DeniedHost("evil.example".into())
+        );
     }
 
     #[tokio::test]
@@ -1072,7 +1105,10 @@ mod tests {
             Err(e) => e,
             Ok(_) => panic!("expected all-denied resolution to error"),
         };
-        assert_permission_denied(err.as_ref());
+        assert_eq!(
+            acl_error_of(err.as_ref()),
+            AclError::AllAddressesDenied("localhost".into())
+        );
     }
 
     #[tokio::test]
