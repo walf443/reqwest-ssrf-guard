@@ -5,7 +5,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use reqwest_ssrf_guard::Acl;
+use reqwest_ssrf_guard::{Acl, AclError};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
@@ -55,6 +55,24 @@ fn chain_contains(err: &dyn std::error::Error, needle: &str) -> bool {
     false
 }
 
+/// Recover the typed [`AclError`] from anywhere in the source chain — the
+/// classification a consumer performs to tell an ACL block apart from a
+/// genuine network error, instead of string-matching.
+fn acl_error_in_chain(err: &(dyn std::error::Error + 'static)) -> Option<AclError> {
+    let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    while let Some(e) = current {
+        if let Some(acl) = e
+            .downcast_ref::<std::io::Error>()
+            .and_then(|io| io.get_ref())
+            .and_then(|inner| inner.downcast_ref::<AclError>())
+        {
+            return Some(acl.clone());
+        }
+        current = e.source();
+    }
+    None
+}
+
 // --- positive paths through the resolver -------------------------------------
 
 #[tokio::test]
@@ -83,6 +101,13 @@ async fn denied_domain_request_via_resolver_fails() {
     assert!(
         chain_contains(&err, "denied by ACL"),
         "expected ACL error in chain, got: {err:?}"
+    );
+    // The typed reason survives end-to-end through reqwest's error chain, so a
+    // consumer can classify the SSRF block instead of string-matching.
+    assert_eq!(
+        acl_error_in_chain(&err),
+        Some(AclError::NoAllowedAddress("localhost".into())),
+        "expected recoverable AclError in chain, got: {err:?}"
     );
 }
 
