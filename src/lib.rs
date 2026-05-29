@@ -78,7 +78,7 @@ pub enum AclError {
     DeniedHost(String),
     /// Every address the host resolved to was denied by the IP-layer rules.
     /// Produced at DNS-resolution time, never by [`Acl::validate_url`].
-    AllAddressesDenied(String),
+    NoAllowedAddress(String),
 }
 
 impl std::fmt::Display for AclError {
@@ -86,7 +86,7 @@ impl std::fmt::Display for AclError {
         match self {
             Self::DeniedIp(ip) => write!(f, "address {ip} is denied by ACL"),
             Self::DeniedHost(h) => write!(f, "host {h} is denied by ACL"),
-            Self::AllAddressesDenied(h) => {
+            Self::NoAllowedAddress(h) => {
                 write!(f, "all resolved addresses for {h} were denied by ACL")
             }
         }
@@ -465,7 +465,7 @@ impl Resolve for Acl {
                     if allowed.is_empty() {
                         return Err(Box::new(io::Error::new(
                             io::ErrorKind::PermissionDenied,
-                            AclError::AllAddressesDenied(normalize_host(&host)),
+                            AclError::NoAllowedAddress(normalize_host(&host)),
                         ))
                             as Box<dyn std::error::Error + Send + Sync>);
                     }
@@ -1107,7 +1107,7 @@ mod tests {
         };
         assert_eq!(
             acl_error_of(err.as_ref()),
-            AclError::AllAddressesDenied("localhost".into())
+            AclError::NoAllowedAddress("localhost".into())
         );
     }
 

@@ -106,7 +106,7 @@ async fn denied_domain_request_via_resolver_fails() {
     // consumer can classify the SSRF block instead of string-matching.
     assert_eq!(
         acl_error_in_chain(&err),
-        Some(AclError::AllAddressesDenied("localhost".into())),
+        Some(AclError::NoAllowedAddress("localhost".into())),
         "expected recoverable AclError in chain, got: {err:?}"
     );
 }
