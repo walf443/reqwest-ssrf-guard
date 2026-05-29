@@ -55,6 +55,10 @@ pub use ipnet;
 /// Returned by [`Acl::validate_url`] when a URL is denied.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AclError {
+    /// A URL whose scheme is not in the allowlist (see
+    /// [`Acl::allow_schemes`]). Covers host-less URLs like `file:///etc/passwd`
+    /// or `data:` that would otherwise bypass the host/IP checks.
+    DeniedScheme(String),
     /// A URL whose host is a literal IP that was denied.
     DeniedIp(IpAddr),
     /// A URL whose host is a domain name that was denied.
@@ -64,6 +68,7 @@ pub enum AclError {
 impl std::fmt::Display for AclError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::DeniedScheme(s) => write!(f, "scheme {s} is denied by ACL"),
             Self::DeniedIp(ip) => write!(f, "address {ip} is denied by ACL"),
             Self::DeniedHost(h) => write!(f, "host {h} is denied by ACL"),
         }
@@ -115,6 +120,7 @@ impl std::error::Error for AclError {}
 pub struct Acl {
     rules: Vec<Rule>,
     host_rules: Vec<HostRule>,
+    allowed_schemes: Vec<String>,
     default_allow: bool,
 }
 
@@ -154,10 +160,17 @@ impl Default for Acl {
 impl Acl {
     /// Create an empty ACL whose default decision is "allow". Use
     /// [`default_deny`](Self::default_deny) to switch to allowlist mode.
+    ///
+    /// The scheme allowlist defaults to `http` and `https` — [`validate_url`]
+    /// rejects every other scheme. Override with
+    /// [`allow_schemes`](Self::allow_schemes).
+    ///
+    /// [`validate_url`]: Self::validate_url
     pub fn new() -> Self {
         Self {
             rules: vec![],
             host_rules: vec![],
+            allowed_schemes: vec!["http".to_owned(), "https".to_owned()],
             default_allow: true,
         }
     }
@@ -270,6 +283,43 @@ impl Acl {
         }
     }
 
+    /// Replace the scheme allowlist consulted by [`validate_url`](Self::validate_url).
+    ///
+    /// Schemes are compared case-insensitively. The default is `["http",
+    /// "https"]`, which is almost always what you want with reqwest — it
+    /// blocks host-less schemes such as `file:`, `data:`, and `gopher:` that
+    /// would otherwise slip past the host/IP checks. Narrow it to
+    /// `["https"]` to also forbid plaintext, or widen it if you knowingly
+    /// drive a non-HTTP transport.
+    ///
+    /// Passing an empty iterator denies *every* scheme.
+    ///
+    /// ```
+    /// use reqwest_ssrf_guard::{Acl, AclError};
+    /// let acl = Acl::new(); // defaults to http/https
+    /// assert_eq!(
+    ///     acl.validate_url(&"file:///etc/passwd".parse().unwrap()),
+    ///     Err(AclError::DeniedScheme("file".into())),
+    /// );
+    ///
+    /// let https_only = Acl::new().allow_schemes(["https"]);
+    /// assert_eq!(
+    ///     https_only.validate_url(&"http://example.com/".parse().unwrap()),
+    ///     Err(AclError::DeniedScheme("http".into())),
+    /// );
+    /// ```
+    pub fn allow_schemes<I, S>(mut self, schemes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.allowed_schemes = schemes
+            .into_iter()
+            .map(|s| s.as_ref().to_ascii_lowercase())
+            .collect();
+        self
+    }
+
     /// Flip the default decision to deny — useful for allowlist-style ACLs
     /// where only the explicitly allowed IPs are permitted.
     pub fn default_deny(mut self) -> Self {
@@ -300,16 +350,25 @@ impl Acl {
         self.default_allow
     }
 
-    /// Reject `url` if its host violates the ACL.
+    /// Reject `url` if its scheme or host violates the ACL.
     ///
-    /// * Domain hosts → consult host rules ([`host_decision`](Self::host_decision)).
-    /// * IP-literal hosts → consult IP rules ([`is_allowed_ip`](Self::is_allowed_ip)).
+    /// 1. The scheme must be in the allowlist (default `http`/`https`, see
+    ///    [`allow_schemes`](Self::allow_schemes)) — otherwise
+    ///    [`AclError::DeniedScheme`]. This is checked first, so host-less
+    ///    URLs like `file:///etc/passwd` or `data:` are rejected here rather
+    ///    than silently passing.
+    /// 2. Domain hosts → consult host rules ([`host_decision`](Self::host_decision)).
+    /// 3. IP-literal hosts → consult IP rules ([`is_allowed_ip`](Self::is_allowed_ip)).
     ///
     /// Domain hosts that no host rule matches return `Ok` — the actual IP
     /// filtering will happen at DNS resolution time via the [`Resolve`]
     /// impl. Call this before handing a user-supplied URL to reqwest so that
     /// IP-literal hosts (which bypass DNS) are still subject to the ACL.
     pub fn validate_url(&self, url: &Url) -> Result<(), AclError> {
+        let scheme = url.scheme();
+        if !self.allowed_schemes.iter().any(|s| s == scheme) {
+            return Err(AclError::DeniedScheme(scheme.to_owned()));
+        }
         let Some(host) = url.host() else {
             return Ok(());
         };
@@ -796,6 +855,90 @@ mod tests {
         assert!(
             acl.validate_url(&Url::parse("http://192.168.1.101/").unwrap())
                 .is_err()
+        );
+    }
+
+    // --- scheme allowlist ------------------------------------------------
+
+    #[test]
+    fn validate_url_rejects_non_http_schemes_by_default() {
+        let acl = deny_local();
+        for url in [
+            "file:///etc/passwd",
+            "data:text/plain,hello",
+            "gopher://example.com/",
+            "ftp://example.com/x",
+        ] {
+            let err = acl.validate_url(&Url::parse(url).unwrap()).unwrap_err();
+            assert!(
+                matches!(err, AclError::DeniedScheme(_)),
+                "{url} should be denied by scheme, got {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_url_allows_http_and_https_by_default() {
+        let acl = deny_local();
+        assert!(
+            acl.validate_url(&Url::parse("http://example.com/").unwrap())
+                .is_ok()
+        );
+        assert!(
+            acl.validate_url(&Url::parse("https://example.com/").unwrap())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn validate_url_scheme_check_runs_before_host_check() {
+        // A denied host over a denied scheme reports the scheme first.
+        let acl = Acl::new().deny_host("evil.example");
+        let err = acl
+            .validate_url(&Url::parse("ftp://evil.example/").unwrap())
+            .unwrap_err();
+        assert_eq!(err, AclError::DeniedScheme("ftp".into()));
+    }
+
+    #[test]
+    fn allow_schemes_https_only_forbids_plaintext() {
+        let acl = Acl::new().allow_schemes(["https"]);
+        assert_eq!(
+            acl.validate_url(&Url::parse("http://example.com/").unwrap()),
+            Err(AclError::DeniedScheme("http".into()))
+        );
+        assert!(
+            acl.validate_url(&Url::parse("https://example.com/").unwrap())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn allow_schemes_is_case_insensitive() {
+        // url normalizes the scheme to lowercase, and the allowlist is lowered
+        // too, so a mixed-case configured scheme still matches.
+        let acl = Acl::new().allow_schemes(["HTTP"]);
+        assert!(
+            acl.validate_url(&Url::parse("http://example.com/").unwrap())
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn allow_schemes_empty_denies_everything() {
+        let acl = Acl::new().allow_schemes(Vec::<String>::new());
+        assert!(
+            acl.validate_url(&Url::parse("https://example.com/").unwrap())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn allow_schemes_can_widen() {
+        let acl = Acl::new().allow_schemes(["http", "https", "ftp"]);
+        assert!(
+            acl.validate_url(&Url::parse("ftp://example.com/").unwrap())
+                .is_ok()
         );
     }
 

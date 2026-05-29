@@ -131,7 +131,20 @@ acl.validate_url(&url)?;                       // rejects IP literals
 let resp = client.get(url).send().await?;
 ```
 
-`Acl::validate_url` consults both host rules and IP rules.
+`Acl::validate_url` checks the URL scheme first, then consults both host
+rules and IP rules.
+
+### Scheme allowlist
+
+`validate_url` only permits schemes in the allowlist, which defaults to
+`http` and `https`. This rejects host-less URLs such as `file:///etc/passwd`,
+`data:`, and `gopher://…` that would otherwise slip past the host/IP checks
+(`AclError::DeniedScheme`). Override it when needed:
+
+```rust
+Acl::new().allow_schemes(["https"]);            // forbid plaintext http too
+Acl::new().allow_schemes(["http", "https", "ftp"]); // widen if you must
+```
 
 ### `reqwest-middleware` integration (feature: `middleware`)
 
