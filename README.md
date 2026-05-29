@@ -142,8 +142,8 @@ rules and IP rules.
 (`AclError::DeniedScheme`). Override it when needed:
 
 ```rust
-Acl::new().allow_schemes(["https"]);            // forbid plaintext http too
-Acl::new().allow_schemes(["http", "https", "ftp"]); // widen if you must
+Acl::new().restrict_schemes(["https"]);            // forbid plaintext http too
+Acl::new().restrict_schemes(["http", "https", "ftp"]); // widen if you must
 ```
 
 ### `reqwest-middleware` integration (feature: `middleware`)

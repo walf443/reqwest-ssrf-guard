@@ -56,7 +56,7 @@ pub use ipnet;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AclError {
     /// A URL whose scheme is not in the allowlist (see
-    /// [`Acl::allow_schemes`]). Covers host-less URLs like `file:///etc/passwd`
+    /// [`Acl::restrict_schemes`]). Covers host-less URLs like `file:///etc/passwd`
     /// or `data:` that would otherwise bypass the host/IP checks.
     DeniedScheme(String),
     /// A URL whose host is a literal IP that was denied.
@@ -163,7 +163,7 @@ impl Acl {
     ///
     /// The scheme allowlist defaults to `http` and `https` — [`validate_url`]
     /// rejects every other scheme. Override with
-    /// [`allow_schemes`](Self::allow_schemes).
+    /// [`restrict_schemes`](Self::restrict_schemes).
     ///
     /// [`validate_url`]: Self::validate_url
     pub fn new() -> Self {
@@ -283,7 +283,12 @@ impl Acl {
         }
     }
 
-    /// Replace the scheme allowlist consulted by [`validate_url`](Self::validate_url).
+    /// Restrict [`validate_url`](Self::validate_url) to exactly the given
+    /// schemes, replacing the default allowlist.
+    ///
+    /// Unlike the accumulating `allow_*` / `deny_*` rule builders, this is a
+    /// *set* — the argument becomes the complete allowlist, so pass every
+    /// scheme you want to permit (not just the additions).
     ///
     /// Schemes are compared case-insensitively. The default is `["http",
     /// "https"]`, which is almost always what you want with reqwest — it
@@ -302,13 +307,13 @@ impl Acl {
     ///     Err(AclError::DeniedScheme("file".into())),
     /// );
     ///
-    /// let https_only = Acl::new().allow_schemes(["https"]);
+    /// let https_only = Acl::new().restrict_schemes(["https"]);
     /// assert_eq!(
     ///     https_only.validate_url(&"http://example.com/".parse().unwrap()),
     ///     Err(AclError::DeniedScheme("http".into())),
     /// );
     /// ```
-    pub fn allow_schemes<I, S>(mut self, schemes: I) -> Self
+    pub fn restrict_schemes<I, S>(mut self, schemes: I) -> Self
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -353,7 +358,7 @@ impl Acl {
     /// Reject `url` if its scheme or host violates the ACL.
     ///
     /// 1. The scheme must be in the allowlist (default `http`/`https`, see
-    ///    [`allow_schemes`](Self::allow_schemes)) — otherwise
+    ///    [`restrict_schemes`](Self::restrict_schemes)) — otherwise
     ///    [`AclError::DeniedScheme`]. This is checked first, so host-less
     ///    URLs like `file:///etc/passwd` or `data:` are rejected here rather
     ///    than silently passing.
@@ -901,8 +906,8 @@ mod tests {
     }
 
     #[test]
-    fn allow_schemes_https_only_forbids_plaintext() {
-        let acl = Acl::new().allow_schemes(["https"]);
+    fn restrict_schemes_https_only_forbids_plaintext() {
+        let acl = Acl::new().restrict_schemes(["https"]);
         assert_eq!(
             acl.validate_url(&Url::parse("http://example.com/").unwrap()),
             Err(AclError::DeniedScheme("http".into()))
@@ -914,10 +919,10 @@ mod tests {
     }
 
     #[test]
-    fn allow_schemes_is_case_insensitive() {
+    fn restrict_schemes_is_case_insensitive() {
         // url normalizes the scheme to lowercase, and the allowlist is lowered
         // too, so a mixed-case configured scheme still matches.
-        let acl = Acl::new().allow_schemes(["HTTP"]);
+        let acl = Acl::new().restrict_schemes(["HTTP"]);
         assert!(
             acl.validate_url(&Url::parse("http://example.com/").unwrap())
                 .is_ok()
@@ -925,8 +930,8 @@ mod tests {
     }
 
     #[test]
-    fn allow_schemes_empty_denies_everything() {
-        let acl = Acl::new().allow_schemes(Vec::<String>::new());
+    fn restrict_schemes_empty_denies_everything() {
+        let acl = Acl::new().restrict_schemes(Vec::<String>::new());
         assert!(
             acl.validate_url(&Url::parse("https://example.com/").unwrap())
                 .is_err()
@@ -934,8 +939,8 @@ mod tests {
     }
 
     #[test]
-    fn allow_schemes_can_widen() {
-        let acl = Acl::new().allow_schemes(["http", "https", "ftp"]);
+    fn restrict_schemes_can_widen() {
+        let acl = Acl::new().restrict_schemes(["http", "https", "ftp"]);
         assert!(
             acl.validate_url(&Url::parse("ftp://example.com/").unwrap())
                 .is_ok()
