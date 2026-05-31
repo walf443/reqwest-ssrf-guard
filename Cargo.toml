@@ -5,7 +5,7 @@ edition = "2024"
 description = "Mitigate SSRF and DNS rebinding in reqwest by filtering DNS results, redirects, and URL literals"
 keywords = ["reqwest", "ssrf", "dns-rebinding", "acl", "security"]
 categories = ["web-programming", "network-programming"]
-license = "MIT OR Apache-2.0"
+license = "MIT"
 
 [features]
 default = []

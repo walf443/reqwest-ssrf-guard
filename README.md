@@ -6,16 +6,45 @@ host ACL.
 
 ## Quick start
 
-The `Acl` builder is both the policy and the `Resolve` impl, so hand it
-straight to reqwest:
+The most robust setup enables the `middleware` feature, so every outgoing
+request — **including an initial URL whose host is an IP literal** — is
+validated automatically and you can keep using the client like any other
+`reqwest`-based client:
+
+```toml
+[dependencies]
+reqwest-ssrf-guard = { version = "0.1", features = ["middleware"] }
+```
 
 ```rust
-use std::sync::Arc;
+use reqwest_ssrf_guard::Acl;
+use reqwest_middleware::ClientBuilder;
+
+let acl = Acl::new().deny_local_network();
+
+let inner = acl.configure(reqwest::Client::builder()).build()?;   // resolver + redirect policy
+let client = acl
+    .configure_middleware(ClientBuilder::new(inner))              // validate_url on every request
+    .build();
+```
+
+### Without the `middleware` feature
+
+If you'd rather not pull in `reqwest-middleware`, hand the `Acl` to reqwest
+directly. `configure` installs the resolver and the redirect policy, which
+cover DNS lookups and redirect hops — but **the initial request URL is not
+checked automatically**. You must call `validate_url` yourself before every
+request, otherwise an IP-literal host such as `http://169.254.169.254/`
+reaches the network without ever passing through the resolver:
+
+```rust
 use reqwest_ssrf_guard::Acl;
 
-let client = reqwest::Client::builder()
-    .dns_resolver(Arc::new(Acl::new().deny_local_network()))
-    .build()?;
+let acl = Acl::new().deny_local_network();
+let client = acl.configure(reqwest::Client::builder()).build()?; // resolver + redirect policy
+
+acl.validate_url(&url)?;                  // REQUIRED: rejects IP-literal hosts the resolver never sees
+let resp = client.get(url).send().await?;
 ```
 
 `deny_local_network()` rejects RFC1918 private ranges, loopback, link-local,
