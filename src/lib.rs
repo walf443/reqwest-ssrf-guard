@@ -1,46 +1,4 @@
-//! Mitigate SSRF / DNS rebinding in [`reqwest`] by filtering DNS lookups,
-//! redirect targets, and URL literals through an IP / host ACL.
-//!
-//! # Quick start
-//!
-//! The [`Acl`] builder is both the policy and the [`Resolve`] impl, so you
-//! can hand it straight to reqwest:
-//!
-//! ```no_run
-//! use std::sync::Arc;
-//! use reqwest_ssrf_guard::Acl;
-//!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let client = reqwest::Client::builder()
-//!     .dns_resolver(Arc::new(Acl::new().deny_local_network()))
-//!     .build()?;
-//! # let _ = client;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! # Customizing
-//!
-//! Combine presets with explicit rules. Explicit `allow_*` rules always win
-//! over `deny_*`, so the natural "deny local network, except for this one
-//! address" pattern just works:
-//!
-//! ```no_run
-//! use std::sync::Arc;
-//! use reqwest_ssrf_guard::Acl;
-//!
-//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
-//! let acl = Acl::new()
-//!     .deny_local_network()
-//!     .allow_cidr("192.168.1.100/32".parse()?);
-//!
-//! let client = reqwest::Client::builder()
-//!     .dns_resolver(Arc::new(acl))
-//!     .build()?;
-//! # let _ = client;
-//! # Ok(())
-//! # }
-//! ```
+#![doc = include_str!("../README.md")]
 
 use std::io;
 use std::net::{IpAddr, SocketAddr};
@@ -384,7 +342,14 @@ impl Acl {
     ///
     /// `validate_url` on the initial request URL is not covered here —
     /// either call it manually before each request, or enable the
-    /// `middleware` feature and apply [`configure_middleware`](Self::configure_middleware).
+    #[cfg_attr(
+        feature = "middleware",
+        doc = "`middleware` feature and apply [`configure_middleware`](Self::configure_middleware)."
+    )]
+    #[cfg_attr(
+        not(feature = "middleware"),
+        doc = "`middleware` feature and apply `configure_middleware`."
+    )]
     pub fn configure(&self, builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
         builder
             .dns_resolver(std::sync::Arc::new(self.clone()))

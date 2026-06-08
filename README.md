@@ -17,6 +17,8 @@ reqwest-ssrf-guard = { version = "0.1", features = ["middleware"] }
 ```
 
 ```rust
+# #[cfg(feature = "middleware")]
+# fn demo() -> Result<(), Box<dyn std::error::Error>> {
 use reqwest_ssrf_guard::Acl;
 use reqwest_middleware::ClientBuilder;
 
@@ -26,6 +28,9 @@ let inner = acl.configure(reqwest::Client::builder()).build()?;   // resolver + 
 let client = acl
     .configure_middleware(ClientBuilder::new(inner))              // validate_url on every request
     .build();
+# let _ = client;
+# Ok(())
+# }
 ```
 
 ### Without the `middleware` feature
@@ -38,6 +43,7 @@ request, otherwise an IP-literal host such as `http://169.254.169.254/`
 reaches the network without ever passing through the resolver:
 
 ```rust
+# async fn demo(url: reqwest::Url) -> Result<(), Box<dyn std::error::Error>> {
 use reqwest_ssrf_guard::Acl;
 
 let acl = Acl::new().deny_local_network();
@@ -45,6 +51,9 @@ let client = acl.configure(reqwest::Client::builder()).build()?; // resolver + r
 
 acl.validate_url(&url)?;                  // REQUIRED: rejects IP-literal hosts the resolver never sees
 let resp = client.get(url).send().await?;
+# let _ = resp;
+# Ok(())
+# }
 ```
 
 `deny_local_network()` rejects RFC1918 private ranges, loopback, link-local,
@@ -62,6 +71,7 @@ Combine presets with explicit rules. **Explicit `allow_*` always wins over
 specific IP" reads naturally:
 
 ```rust
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use std::sync::Arc;
 use reqwest_ssrf_guard::Acl;
 
@@ -73,6 +83,9 @@ let acl = Acl::new()
 let client = reqwest::Client::builder()
     .dns_resolver(Arc::new(acl))
     .build()?;
+# let _ = client;
+# Ok(())
+# }
 ```
 
 Builder methods:
@@ -90,10 +103,15 @@ Builder methods:
 Allowlist example:
 
 ```rust
+# use reqwest_ssrf_guard::Acl;
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 let acl = Acl::new()
     .default_deny()
     .allow_cidr("1.1.1.1/32".parse()?)
     .allow_cidr("8.8.8.8/32".parse()?);
+# let _ = acl;
+# Ok(())
+# }
 ```
 
 ## Host name rules
@@ -103,11 +121,15 @@ IP layer can't: blocking a specific domain regardless of where it resolves,
 and pre-trusting a host so it isn't filtered.
 
 ```rust
+# use reqwest_ssrf_guard::Acl;
+# fn main() {
 let acl = Acl::new()
     .deny_local_network()
     .deny_host_suffix(".internal.corp")          // block a whole zone
     .deny_host("phishing.example")               // block a specific name
     .allow_host("api.example.com");              // trust this host fully
+# let _ = acl;
+# }
 ```
 
 Semantics (same "explicit allow wins" model as the IP layer):
@@ -136,6 +158,7 @@ of them needs the ACL plugged in separately:
 Use [`Acl::configure`] to install the first two in one shot:
 
 ```rust
+# fn main() -> Result<(), Box<dyn std::error::Error>> {
 use std::time::Duration;
 use reqwest_ssrf_guard::Acl;
 
@@ -147,6 +170,9 @@ let client = acl
     .configure(reqwest::Client::builder())   // resolver + redirect policy
     .timeout(Duration::from_secs(30))        // any other reqwest settings work
     .build()?;
+# let _ = client;
+# Ok(())
+# }
 ```
 
 That leaves the initial URL — handle it with either a manual `validate_url`
@@ -155,9 +181,14 @@ call or the `middleware` feature.
 ### Manual URL pre-check
 
 ```rust
+# use reqwest_ssrf_guard::Acl;
+# async fn demo(client: reqwest::Client, url: reqwest::Url) -> Result<(), Box<dyn std::error::Error>> {
 let acl = Acl::new().deny_local_network();
 acl.validate_url(&url)?;                       // rejects IP literals
 let resp = client.get(url).send().await?;
+# let _ = resp;
+# Ok(())
+# }
 ```
 
 `Acl::validate_url` consults both host rules and IP rules.
@@ -173,6 +204,8 @@ reqwest-ssrf-guard = { version = "0.1", features = ["middleware"] }
 ```
 
 ```rust
+# #[cfg(feature = "middleware")]
+# fn demo() -> Result<(), Box<dyn std::error::Error>> {
 use reqwest_ssrf_guard::Acl;
 use reqwest_middleware::ClientBuilder;
 
@@ -182,6 +215,9 @@ let inner = acl.configure(reqwest::Client::builder()).build()?;
 let client = acl
     .configure_middleware(ClientBuilder::new(inner))
     .build();
+# let _ = client;
+# Ok(())
+# }
 ```
 
 A failed `validate_url` surfaces as
@@ -195,6 +231,7 @@ When the built-in presets aren't enough, drop into a closure via
 closures can capture any state you like:
 
 ```rust
+# fn main() {
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::{Arc, RwLock};
@@ -208,4 +245,6 @@ let acl = Acl::new()
         let bl = dynamic_blocklist.clone();
         move |ip| bl.read().unwrap().contains(&ip)
     });
+# let _ = acl;
+# }
 ```
