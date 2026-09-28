@@ -28,7 +28,11 @@ pub use ipnet;
 ///         .downcast_ref::<AclError>()
 /// }
 /// ```
+///
+/// New rejection reasons may be added in future releases without a breaking
+/// change, so a `match` on this enum needs a wildcard arm.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AclError {
     /// A URL whose host is a literal IP that was denied.
     DeniedIp(IpAddr),
