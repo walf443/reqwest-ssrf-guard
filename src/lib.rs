@@ -1144,14 +1144,12 @@ mod tests {
     }
 
     #[test]
-    fn allow_port_is_an_exception() {
+    fn allow_ports_is_an_exception() {
         let acl = Acl::new()
             .deny_non_default_ports()
-            .allow_ports([8080, 8443])
-            .allow_ports([9000]);
+            .allow_ports([8080, 8443]);
         assert!(check(&acl, "https://example.com:8080/").is_ok());
         assert!(check(&acl, "https://example.com:8443/").is_ok());
-        assert!(check(&acl, "https://example.com:9000/").is_ok());
         assert_eq!(
             check(&acl, "https://example.com:8444/"),
             Err(AclError::DeniedPort(8444))
@@ -1161,7 +1159,23 @@ mod tests {
     }
 
     #[test]
-    fn allow_port_combines_with_ip_rules() {
+    fn allow_ports_accumulates_across_calls() {
+        // A later call must add to, not replace, the ports allowed earlier.
+        let acl = Acl::new()
+            .deny_non_default_ports()
+            .allow_ports([8080, 8443])
+            .allow_ports([9000]);
+        assert!(check(&acl, "https://example.com:8080/").is_ok());
+        assert!(check(&acl, "https://example.com:8443/").is_ok());
+        assert!(check(&acl, "https://example.com:9000/").is_ok());
+        assert_eq!(
+            check(&acl, "https://example.com:9001/"),
+            Err(AclError::DeniedPort(9001))
+        );
+    }
+
+    #[test]
+    fn allow_ports_combines_with_ip_rules() {
         let acl = Acl::new()
             .deny_local_network()
             .allow_cidr(cidr("::1/128"))
