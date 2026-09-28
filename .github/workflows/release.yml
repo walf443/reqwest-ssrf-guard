@@ -37,7 +37,7 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           version="${TAG#v}"
-          if ! grep -Eq "^## \[${version}\] -[0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md; then
+          if ! grep -Eq "^## \[${version}\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$" CHANGELOG.md; then
             echo "::error::CHANGELOG.md needs a '## [${version}] - YYYY-MM-DD' heading"
             exit 1
           fi
