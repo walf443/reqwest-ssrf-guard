@@ -173,8 +173,11 @@ let acl = Acl::new()
 # }
 ```
 
-- Default ports are normalized away by URL parsing, so `http://host:80/`
-  and `https://host:443/` are treated as having no port and pass.
+- Only the **scheme's own** default port counts as default. URL parsing
+  normalizes it away, so `http://host:80/` and `https://host:443/` are
+  treated as having no port and pass, but `https://host:80/` and
+  `http://host:443/` are rejected with `DeniedPort`. Use
+  `allow_ports([80, 443])` if you want both ports allowed for either scheme.
 - Port rules apply even to hosts matched by `allow_host*`.
 - `default_deny()` does not affect ports.
 - Port rules are enforced by `validate_url` and the redirect policy only —
