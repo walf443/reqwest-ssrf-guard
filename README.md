@@ -99,6 +99,8 @@ Builder methods:
 | `deny_host_suffix(suf)` / `allow_host_suffix(suf)` | Match by trailing-string suffix. Pass a leading dot to limit to strict subdomains (e.g. `".example.com"`). |
 | `deny_host_when(\|h\| ...)` / `allow_host_when(\|h\| ...)` | Custom host predicate. The hostname is normalized (lowercased, trailing dot stripped) before being passed in. |
 | `default_deny()` | Flip the default IP-layer decision — useful for allowlist mode. |
+| `deny_non_default_ports()` | Reject URLs with an explicit non-default port (e.g. `:8080`). See [Port rules](#port-rules). |
+| `allow_port(port)` | Exempt a specific port from `deny_non_default_ports()`. |
 
 Allowlist example:
 
@@ -144,6 +146,32 @@ Semantics (same "explicit allow wins" model as the IP layer):
 The hostname is lowercased and any trailing dot is stripped before
 matching, so `Example.COM.` and `example.com` are equivalent.
 
+## Port rules
+
+Legitimate outbound requests rarely need a non-default port, while SSRF
+payloads often use one to reach internal services (`:6379`, `:9200`, ...).
+`deny_non_default_ports()` rejects any URL whose port differs from its
+scheme's default, with `allow_port` for exceptions:
+
+```rust
+# use reqwest_ssrf_guard::Acl;
+# fn main() {
+let acl = Acl::new()
+    .deny_local_network()
+    .deny_non_default_ports()   // http://host:8080/ → AclError::DeniedPort(8080)
+    .allow_port(8443);          // ...except this one
+# let _ = acl;
+# }
+```
+
+- Default ports are normalized away by URL parsing, so `http://host:80/`
+  and `https://host:443/` are treated as having no port and pass.
+- Port rules apply even to hosts matched by `allow_host*`.
+- `default_deny()` does not affect ports.
+- Port rules are enforced by `validate_url` and the redirect policy only —
+  the resolver never sees ports. Use the `middleware` feature (or call
+  `validate_url` yourself) so the initial request URL is checked too.
+
 ## Wiring the ACL into a client
 
 There are three places where a request can land on a denied host, and each
@@ -151,9 +179,9 @@ of them needs the ACL plugged in separately:
 
 | Layer | Covers | Misses |
 | --- | --- | --- |
-| **Resolver** (`dns_resolver`) | DNS lookups — initial request and any redirect to a domain | URLs / redirects whose host is an IP literal (DNS isn't consulted) |
-| **Redirect policy** (`redirect`) | Every redirect hop, including IP-literal targets | The initial URL itself |
-| **`validate_url`** (or `middleware` feature) | The initial request URL, including IP-literal hosts | Anything reqwest decides to follow after that |
+| **Resolver** (`dns_resolver`) | DNS lookups — initial request and any redirect to a domain | URLs / redirects whose host is an IP literal (DNS isn't consulted); port rules |
+| **Redirect policy** (`redirect`) | Every redirect hop, including IP-literal targets and port rules | The initial URL itself |
+| **`validate_url`** (or `middleware` feature) | The initial request URL, including IP-literal hosts and port rules | Anything reqwest decides to follow after that |
 
 Use [`Acl::configure`] to install the first two in one shot:
 
@@ -191,7 +219,7 @@ let resp = client.get(url).send().await?;
 # }
 ```
 
-`Acl::validate_url` consults both host rules and IP rules.
+`Acl::validate_url` consults port rules, host rules and IP rules.
 
 ### `reqwest-middleware` integration (feature: `middleware`)
 

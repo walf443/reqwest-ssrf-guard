@@ -38,6 +38,9 @@ pub enum AclError {
     DeniedIp(IpAddr),
     /// A URL whose host is a domain name denied by a host rule (before DNS).
     DeniedHost(String),
+    /// A URL with an explicit non-default port that was denied by the port
+    /// rules (see [`Acl::deny_non_default_ports`]).
+    DeniedPort(u16),
     /// Every address the host resolved to was denied by the IP-layer rules.
     /// Produced at DNS-resolution time, never by [`Acl::validate_url`].
     NoAllowedAddress(String),
@@ -48,6 +51,7 @@ impl std::fmt::Display for AclError {
         match self {
             Self::DeniedIp(ip) => write!(f, "address {ip} is denied by ACL"),
             Self::DeniedHost(h) => write!(f, "host {h} is denied by ACL"),
+            Self::DeniedPort(p) => write!(f, "port {p} is denied by ACL"),
             Self::NoAllowedAddress(h) => {
                 write!(f, "all resolved addresses for {h} were denied by ACL")
             }
@@ -87,6 +91,11 @@ impl std::error::Error for AclError {}
 ///
 /// Rule order does not matter within a layer.
 ///
+/// Independently of both layers, [`validate_url`](Self::validate_url) can
+/// also reject URLs carrying an explicit non-default port — see
+/// [`deny_non_default_ports`](Self::deny_non_default_ports). The port check
+/// applies even to hosts matched by a host `allow_*` rule.
+///
 /// ```
 /// use reqwest_ssrf_guard::Acl;
 /// let acl = Acl::new()
@@ -101,6 +110,8 @@ pub struct Acl {
     rules: Vec<Rule>,
     host_rules: Vec<HostRule>,
     default_allow: bool,
+    deny_non_default_ports: bool,
+    allowed_ports: Vec<u16>,
 }
 
 #[derive(Clone)]
@@ -144,6 +155,8 @@ impl Acl {
             rules: vec![],
             host_rules: vec![],
             default_allow: true,
+            deny_non_default_ports: false,
+            allowed_ports: vec![],
         }
     }
 
@@ -261,6 +274,44 @@ impl Acl {
         self.default_allow = false;
         self
     }
+
+    /// Reject URLs that carry an explicit port other than their scheme's
+    /// default, e.g. `http://example.com:8080/`.
+    ///
+    /// Default ports are normalized away by URL parsing, so
+    /// `http://example.com:80/` and `https://example.com:443/` still pass.
+    /// Use [`allow_port`](Self::allow_port) to permit specific ports.
+    ///
+    /// The check runs in [`validate_url`](Self::validate_url) (and therefore
+    /// in the redirect policy and the `middleware` integration), and applies
+    /// even to hosts matched by a host `allow_*` rule. The [`Resolve`] impl
+    /// never sees ports, so without the `middleware` feature the initial
+    /// request URL is only checked if you call `validate_url` yourself.
+    /// [`default_deny`](Self::default_deny) does not affect ports.
+    ///
+    /// ```
+    /// use reqwest_ssrf_guard::{Acl, AclError};
+    /// use reqwest::Url;
+    ///
+    /// let acl = Acl::new().deny_non_default_ports().allow_port(8443);
+    /// let check = |s: &str| acl.validate_url(&Url::parse(s).unwrap());
+    /// assert!(check("https://example.com/").is_ok());
+    /// assert!(check("https://example.com:443/").is_ok());   // default port
+    /// assert!(check("https://example.com:8443/").is_ok());  // explicitly allowed
+    /// assert_eq!(check("http://example.com:6379/"), Err(AclError::DeniedPort(6379)));
+    /// ```
+    pub fn deny_non_default_ports(mut self) -> Self {
+        self.deny_non_default_ports = true;
+        self
+    }
+
+    /// Allow the explicit port `port` even when
+    /// [`deny_non_default_ports`](Self::deny_non_default_ports) is set. Has no
+    /// effect otherwise.
+    pub fn allow_port(mut self, port: u16) -> Self {
+        self.allowed_ports.push(port);
+        self
+    }
 }
 
 impl Acl {
@@ -285,8 +336,19 @@ impl Acl {
         self.default_allow
     }
 
-    /// Reject `url` if its host violates the ACL.
+    /// Return `true` if an explicit, non-default `port` is permitted by the
+    /// port rules. Always `true` unless
+    /// [`deny_non_default_ports`](Self::deny_non_default_ports) is set.
+    pub fn is_allowed_port(&self, port: u16) -> bool {
+        !self.deny_non_default_ports || self.allowed_ports.contains(&port)
+    }
+
+    /// Reject `url` if its host or port violates the ACL.
     ///
+    /// * Explicit non-default ports → consult port rules
+    ///   ([`is_allowed_port`](Self::is_allowed_port)). This runs first, so a
+    ///   URL denied by both its port and its host reports
+    ///   [`AclError::DeniedPort`].
     /// * Domain hosts → consult host rules ([`host_decision`](Self::host_decision)).
     /// * IP-literal hosts → consult IP rules ([`is_allowed_ip`](Self::is_allowed_ip)).
     ///
@@ -298,6 +360,9 @@ impl Acl {
         let Some(host) = url.host() else {
             return Ok(());
         };
+        if let Some(port) = url.port().filter(|&p| !self.is_allowed_port(p)) {
+            return Err(AclError::DeniedPort(port));
+        }
         match host {
             url::Host::Domain(name) => match self.host_decision(name) {
                 HostDecision::Allow | HostDecision::Continue => Ok(()),
@@ -404,6 +469,9 @@ fn redirect_decision(acl: &Acl, url: &Url) -> RedirectDecision {
     }
 }
 
+/// Filters DNS results through the host and IP rules. Port rules are not
+/// applied here — reqwest only hands the resolver a hostname — so they are
+/// enforced by [`Acl::validate_url`] and the redirect policy instead.
 impl Resolve for Acl {
     fn resolve(&self, name: Name) -> Resolving {
         let host = name.as_str().to_owned();
@@ -1023,6 +1091,130 @@ mod tests {
         assert_eq!(
             redirect_decision(&acl, &Url::parse("http://192.168.1.101/").unwrap()),
             RedirectDecision::Deny(AclError::DeniedIp(v4("192.168.1.101")))
+        );
+    }
+
+    // --- port rules ------------------------------------------------------
+
+    fn check(acl: &Acl, url: &str) -> Result<(), AclError> {
+        acl.validate_url(&Url::parse(url).unwrap())
+    }
+
+    #[test]
+    fn ports_are_unrestricted_by_default() {
+        let acl = Acl::new();
+        assert!(check(&acl, "http://example.com:8080/").is_ok());
+        assert!(check(&acl, "http://1.1.1.1:6379/").is_ok());
+        // default_deny is IP-layer only and must not restrict ports.
+        let acl = Acl::new().default_deny().allow_cidr(cidr("1.1.1.1/32"));
+        assert!(check(&acl, "http://1.1.1.1:6379/").is_ok());
+    }
+
+    #[test]
+    fn deny_non_default_ports_allows_default_ports() {
+        // URL parsing normalizes default ports away, so these carry no port.
+        let acl = Acl::new().deny_non_default_ports();
+        assert!(check(&acl, "http://example.com/").is_ok());
+        assert!(check(&acl, "http://example.com:80/").is_ok());
+        assert!(check(&acl, "https://example.com:443/").is_ok());
+        assert!(check(&acl, "https://1.1.1.1:443/").is_ok());
+    }
+
+    #[test]
+    fn deny_non_default_ports_rejects_explicit_ports() {
+        let acl = Acl::new().deny_non_default_ports();
+        assert_eq!(
+            check(&acl, "http://example.com:8080/"),
+            Err(AclError::DeniedPort(8080))
+        );
+        // Swapped defaults are non-default for the scheme.
+        assert_eq!(
+            check(&acl, "https://example.com:80/"),
+            Err(AclError::DeniedPort(80))
+        );
+        assert_eq!(
+            check(&acl, "http://1.1.1.1:6379/"),
+            Err(AclError::DeniedPort(6379))
+        );
+        assert_eq!(
+            check(&acl, "http://[2606:4700:4700::1111]:25/"),
+            Err(AclError::DeniedPort(25))
+        );
+    }
+
+    #[test]
+    fn allow_port_is_an_exception() {
+        let acl = Acl::new().deny_non_default_ports().allow_port(8443);
+        assert!(check(&acl, "https://example.com:8443/").is_ok());
+        assert_eq!(
+            check(&acl, "https://example.com:8444/"),
+            Err(AclError::DeniedPort(8444))
+        );
+        assert!(acl.is_allowed_port(8443));
+        assert!(!acl.is_allowed_port(8444));
+    }
+
+    #[test]
+    fn allow_port_combines_with_ip_rules() {
+        let acl = Acl::new()
+            .deny_local_network()
+            .allow_cidr(cidr("::1/128"))
+            .deny_non_default_ports()
+            .allow_port(8080);
+        assert!(check(&acl, "http://[::1]:8080/").is_ok());
+        // Port allowed, but IP still denied.
+        assert_eq!(
+            check(&acl, "http://127.0.0.1:8080/"),
+            Err(AclError::DeniedIp(v4("127.0.0.1")))
+        );
+    }
+
+    #[test]
+    fn host_allow_does_not_bypass_port_rules() {
+        let acl = Acl::new()
+            .allow_host("api.example.com")
+            .deny_non_default_ports();
+        assert!(check(&acl, "https://api.example.com/").is_ok());
+        assert_eq!(
+            check(&acl, "https://api.example.com:8443/"),
+            Err(AclError::DeniedPort(8443))
+        );
+    }
+
+    #[test]
+    fn port_check_takes_precedence_over_host_and_ip_checks() {
+        let acl = Acl::new()
+            .deny_local_network()
+            .deny_host("evil.example")
+            .deny_non_default_ports();
+        assert_eq!(
+            check(&acl, "http://evil.example:8080/"),
+            Err(AclError::DeniedPort(8080))
+        );
+        assert_eq!(
+            check(&acl, "http://127.0.0.1:8080/"),
+            Err(AclError::DeniedPort(8080))
+        );
+    }
+
+    #[test]
+    fn redirect_denies_non_default_port() {
+        let acl = Acl::new().deny_non_default_ports();
+        assert_eq!(
+            redirect_decision(&acl, &Url::parse("http://example.com:6379/").unwrap()),
+            RedirectDecision::Deny(AclError::DeniedPort(6379))
+        );
+        assert_eq!(
+            redirect_decision(&acl, &Url::parse("http://example.com/").unwrap()),
+            RedirectDecision::Follow
+        );
+    }
+
+    #[test]
+    fn denied_port_display() {
+        assert_eq!(
+            AclError::DeniedPort(6379).to_string(),
+            "port 6379 is denied by ACL"
         );
     }
 
