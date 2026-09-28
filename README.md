@@ -26,7 +26,13 @@ let acl = Acl::new()
     .deny_local_network()
     .deny_non_default_ports();
 
-let inner = acl.configure(reqwest::Client::builder()).build()?;   // resolver + redirect policy
+let inner = acl
+    .configure(reqwest::Client::builder())   // resolver + redirect policy
+    // Defense in depth: even if an address slips past the ACL, TLS certificate
+    // validation fails for internal hosts and DNS-rebinding targets, and
+    // plain-HTTP-only services such as cloud metadata endpoints are unreachable.
+    .https_only(true)
+    .build()?;
 let client = acl
     .configure_middleware(ClientBuilder::new(inner))              // validate_url on every request
     .build();
@@ -51,7 +57,13 @@ use reqwest_ssrf_guard::Acl;
 let acl = Acl::new()
     .deny_local_network()
     .deny_non_default_ports();
-let client = acl.configure(reqwest::Client::builder()).build()?; // resolver + redirect policy
+let client = acl
+    .configure(reqwest::Client::builder())   // resolver + redirect policy
+    // Defense in depth: even if an address slips past the ACL, TLS certificate
+    // validation fails for internal hosts and DNS-rebinding targets, and
+    // plain-HTTP-only services such as cloud metadata endpoints are unreachable.
+    .https_only(true)
+    .build()?;
 
 acl.validate_url(&url)?;                  // REQUIRED: rejects IP-literal hosts and ports the resolver never sees
 let resp = client.get(url).send().await?;
@@ -72,6 +84,24 @@ the request fails with `PermissionDenied`.
 such as `http://example.com:6379/`, a common way to reach internal
 services. Add `allow_ports([...])` if you need specific ports — see
 [Port rules](#port-rules).
+
+`https_only(true)` is reqwest's own setting, not part of this crate. reqwest
+enforces it on the initial URL and on every redirect hop, so it needs neither
+the middleware nor `validate_url`. It hardens the ACL further:
+
+- A server must present a valid certificate for the requested hostname.
+  Internal services rarely have one that a public trust store accepts, and
+  after DNS rebinding the internal server behind the rebound address can't
+  present one for the attacker's domain, so the TLS handshake fails before any
+  HTTP request is sent.
+- Services that only speak plain HTTP, such as the cloud metadata endpoints,
+  become unreachable.
+- Redirects that downgrade from HTTPS to HTTP are rejected.
+
+It still opens a TCP connection, so it does not stop port probing on its own,
+and it gives no protection if certificate validation is turned off (for example
+with `danger_accept_invalid_certs`). Leave it out if you need to call
+plain-HTTP endpoints.
 
 ## Customizing
 
