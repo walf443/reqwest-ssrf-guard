@@ -28,6 +28,9 @@ let acl = Acl::new()
 
 let inner = acl
     .configure(reqwest::Client::builder())   // resolver + redirect policy
+    // Ignore HTTP_PROXY / HTTPS_PROXY: a proxy resolves the target host itself,
+    // so the ACL's DNS filtering would silently not apply to domain names.
+    .no_proxy()
     // Defense in depth: even if an address slips past the ACL, TLS certificate
     // validation fails for internal hosts and DNS-rebinding targets, and
     // plain-HTTP-only services such as cloud metadata endpoints are unreachable.
@@ -59,6 +62,9 @@ let acl = Acl::new()
     .deny_non_default_ports();
 let client = acl
     .configure(reqwest::Client::builder())   // resolver + redirect policy
+    // Ignore HTTP_PROXY / HTTPS_PROXY: a proxy resolves the target host itself,
+    // so the ACL's DNS filtering would silently not apply to domain names.
+    .no_proxy()
     // Defense in depth: even if an address slips past the ACL, TLS certificate
     // validation fails for internal hosts and DNS-rebinding targets, and
     // plain-HTTP-only services such as cloud metadata endpoints are unreachable.
@@ -102,6 +108,18 @@ It still opens a TCP connection, so it does not stop port probing on its own,
 and it gives no protection if certificate validation is turned off (for example
 with `danger_accept_invalid_certs`). Leave it out if you need to call
 plain-HTTP endpoints.
+
+`no_proxy()` is also a reqwest setting. By default reqwest sends requests
+through the proxy named in `HTTP_PROXY` / `HTTPS_PROXY` (and `ALL_PROXY`).
+With a proxy, the **proxy** resolves the target hostname, and the local
+resolver only looks up the proxy's own address. The IP rules therefore never
+see where a domain name really points, so the protection is silently off.
+Keep `no_proxy()` unless your outbound traffic has to go through a proxy. In
+that case set the proxy explicitly with `.proxy(...)` and make sure the proxy
+enforces its own SSRF / egress rules. Also note that a proxy given by a
+hostname is resolved through the ACL like any other host, so
+`deny_local_network()` rejects it when that hostname points to a private
+address.
 
 ## Customizing
 
