@@ -4,6 +4,8 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  # Reused by release.yml so a tag is only published after CI passes.
+  workflow_call:
 
 env:
   CARGO_TERM_COLOR: always
