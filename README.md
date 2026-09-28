@@ -13,7 +13,7 @@ validated automatically and you can keep using the client like any other
 
 ```toml
 [dependencies]
-reqwest-ssrf-guard = { version = "0.1", features = ["middleware"] }
+reqwest-ssrf-guard = { version = "0.2", features = ["middleware"] }
 ```
 
 ```rust
@@ -288,7 +288,7 @@ before every outgoing request:
 
 ```toml
 [dependencies]
-reqwest-ssrf-guard = { version = "0.1", features = ["middleware"] }
+reqwest-ssrf-guard = { version = "0.2", features = ["middleware"] }
 ```
 
 ```rust

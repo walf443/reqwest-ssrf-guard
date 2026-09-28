@@ -3,18 +3,21 @@ use crate::Acl;
 /// Use [`Acl`] directly as a [`reqwest_middleware::Middleware`] so that
 /// every outgoing request is filtered through [`Acl::validate_url`].
 ///
-/// Enable the `middleware` feature, then:
+/// Enable the `middleware` feature, then register it with
+/// [`configure_middleware`](Acl::configure_middleware), or pass it to
+/// `ClientBuilder::with` directly:
 ///
-/// ```ignore
-/// use std::sync::Arc;
+/// ```no_run
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// use reqwest_ssrf_guard::Acl;
 /// use reqwest_middleware::ClientBuilder;
 ///
 /// let acl = Acl::new().deny_local_network();
-/// let inner = reqwest::Client::builder()
-///     .dns_resolver(Arc::new(acl.clone()))
-///     .build()?;
+/// let inner = acl.configure(reqwest::Client::builder()).build()?; // resolver + redirect policy
 /// let client = ClientBuilder::new(inner).with(acl).build();
+/// # let _ = client;
+/// # Ok(())
+/// # }
 /// ```
 ///
 /// Validation failures are surfaced as `reqwest_middleware::Error::Middleware`
