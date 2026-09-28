@@ -70,7 +70,7 @@ the request fails with `PermissionDenied`.
 
 `deny_non_default_ports()` rejects URLs with an explicit non-default port
 such as `http://example.com:6379/`, a common way to reach internal
-services. Add `allow_port(port)` if you need specific ports — see
+services. Add `allow_ports([...])` if you need specific ports — see
 [Port rules](#port-rules).
 
 ## Customizing
@@ -109,7 +109,7 @@ Builder methods:
 | `deny_host_when(\|h\| ...)` / `allow_host_when(\|h\| ...)` | Custom host predicate. The hostname is normalized (lowercased, trailing dot stripped) before being passed in. |
 | `default_deny()` | Flip the default IP-layer decision — useful for allowlist mode. |
 | `deny_non_default_ports()` | Reject URLs with an explicit non-default port (e.g. `:8080`). See [Port rules](#port-rules). |
-| `allow_port(port)` | Exempt a specific port from `deny_non_default_ports()`. |
+| `allow_ports(ports)` | Exempt the given ports from `deny_non_default_ports()`, e.g. `allow_ports([8080, 8443])`. |
 
 Allowlist example:
 
@@ -160,7 +160,7 @@ matching, so `Example.COM.` and `example.com` are equivalent.
 Legitimate outbound requests rarely need a non-default port, while SSRF
 payloads often use one to reach internal services (`:6379`, `:9200`, ...).
 `deny_non_default_ports()` rejects any URL whose port differs from its
-scheme's default, with `allow_port` for exceptions:
+scheme's default, with `allow_ports` for exceptions:
 
 ```rust
 # use reqwest_ssrf_guard::Acl;
@@ -168,7 +168,7 @@ scheme's default, with `allow_port` for exceptions:
 let acl = Acl::new()
     .deny_local_network()
     .deny_non_default_ports()   // http://host:8080/ → AclError::DeniedPort(8080)
-    .allow_port(8443);          // ...except this one
+    .allow_ports([8080, 8443]); // ...except these
 # let _ = acl;
 # }
 ```

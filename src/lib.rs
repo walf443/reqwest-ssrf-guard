@@ -280,7 +280,7 @@ impl Acl {
     ///
     /// Default ports are normalized away by URL parsing, so
     /// `http://example.com:80/` and `https://example.com:443/` still pass.
-    /// Use [`allow_port`](Self::allow_port) to permit specific ports.
+    /// Use [`allow_ports`](Self::allow_ports) to permit specific ports.
     ///
     /// The check runs in [`validate_url`](Self::validate_url) (and therefore
     /// in the redirect policy and the `middleware` integration), and applies
@@ -293,7 +293,7 @@ impl Acl {
     /// use reqwest_ssrf_guard::{Acl, AclError};
     /// use reqwest::Url;
     ///
-    /// let acl = Acl::new().deny_non_default_ports().allow_port(8443);
+    /// let acl = Acl::new().deny_non_default_ports().allow_ports([8080, 8443]);
     /// let check = |s: &str| acl.validate_url(&Url::parse(s).unwrap());
     /// assert!(check("https://example.com/").is_ok());
     /// assert!(check("https://example.com:443/").is_ok());   // default port
@@ -305,11 +305,12 @@ impl Acl {
         self
     }
 
-    /// Allow the explicit port `port` even when
+    /// Allow each of `ports` even when
     /// [`deny_non_default_ports`](Self::deny_non_default_ports) is set. Has no
-    /// effect otherwise.
-    pub fn allow_port(mut self, port: u16) -> Self {
-        self.allowed_ports.push(port);
+    /// effect otherwise. Calls accumulate, so a single port is
+    /// `allow_ports([8443])`.
+    pub fn allow_ports(mut self, ports: impl IntoIterator<Item = u16>) -> Self {
+        self.allowed_ports.extend(ports);
         self
     }
 }
@@ -1144,8 +1145,13 @@ mod tests {
 
     #[test]
     fn allow_port_is_an_exception() {
-        let acl = Acl::new().deny_non_default_ports().allow_port(8443);
+        let acl = Acl::new()
+            .deny_non_default_ports()
+            .allow_ports([8080, 8443])
+            .allow_ports([9000]);
+        assert!(check(&acl, "https://example.com:8080/").is_ok());
         assert!(check(&acl, "https://example.com:8443/").is_ok());
+        assert!(check(&acl, "https://example.com:9000/").is_ok());
         assert_eq!(
             check(&acl, "https://example.com:8444/"),
             Err(AclError::DeniedPort(8444))
@@ -1160,7 +1166,7 @@ mod tests {
             .deny_local_network()
             .allow_cidr(cidr("::1/128"))
             .deny_non_default_ports()
-            .allow_port(8080);
+            .allow_ports([8080]);
         assert!(check(&acl, "http://[::1]:8080/").is_ok());
         // Port allowed, but IP still denied.
         assert_eq!(

@@ -167,7 +167,7 @@ async fn redirect_to_non_default_port_errors_via_policy() {
         .deny_local_network()
         .allow_cidr("127.0.0.1/32".parse().unwrap())
         .deny_non_default_ports()
-        .allow_port(redirect_server.port());
+        .allow_ports([redirect_server.port()]);
     let client = acl.configure(reqwest::Client::builder()).build().unwrap();
 
     let url = format!("http://localhost:{}/", redirect_server.port());
@@ -252,7 +252,7 @@ mod with_middleware {
             .deny_local_network()
             .allow_cidr("127.0.0.1/32".parse().unwrap())
             .deny_non_default_ports()
-            .allow_port(addr.port());
+            .allow_ports([addr.port()]);
         let inner = acl.configure(reqwest::Client::builder()).build().unwrap();
         let client = acl.configure_middleware(ClientBuilder::new(inner)).build();
 
