@@ -57,10 +57,14 @@ fn chain_contains(err: &dyn std::error::Error, needle: &str) -> bool {
 
 /// Recover the typed [`AclError`] from anywhere in the source chain — the
 /// classification a consumer performs to tell an ACL block apart from a
-/// genuine network error, instead of string-matching.
+/// genuine network error, instead of string-matching. The resolver wraps it
+/// in an `io::Error`; the redirect policy carries it directly.
 fn acl_error_in_chain(err: &(dyn std::error::Error + 'static)) -> Option<AclError> {
     let mut current: Option<&(dyn std::error::Error + 'static)> = Some(err);
     while let Some(e) = current {
+        if let Some(acl) = e.downcast_ref::<AclError>() {
+            return Some(acl.clone());
+        }
         if let Some(acl) = e
             .downcast_ref::<std::io::Error>()
             .and_then(|io| io.get_ref())
@@ -151,6 +155,31 @@ async fn redirect_to_denied_host_errors_via_policy() {
     );
 }
 
+#[tokio::test]
+async fn redirect_to_non_default_port_errors_via_policy() {
+    let final_server = spawn_server(http_200()).await;
+    let final_url = format!("http://127.0.0.1:{}/end", final_server.port());
+    let redirect_server = spawn_server(http_302(&final_url)).await;
+
+    // Only the redirect server's port is allowed; the redirect target's port
+    // is not, so the hop must be rejected before connecting.
+    let acl = Acl::new()
+        .deny_local_network()
+        .allow_cidr("127.0.0.1/32".parse().unwrap())
+        .deny_non_default_ports()
+        .allow_ports([redirect_server.port()]);
+    let client = acl.configure(reqwest::Client::builder()).build().unwrap();
+
+    let url = format!("http://localhost:{}/", redirect_server.port());
+    let err = client.get(&url).send().await.unwrap_err();
+    assert!(err.is_redirect(), "expected redirect error, got: {err}");
+    assert_eq!(
+        acl_error_in_chain(&err),
+        Some(AclError::DeniedPort(final_server.port())),
+        "expected DeniedPort in chain, got: {err:?}"
+    );
+}
+
 // --- middleware feature ------------------------------------------------------
 
 #[cfg(feature = "middleware")]
@@ -189,5 +218,46 @@ mod with_middleware {
             chain_contains(&err, "denied by ACL"),
             "expected ACL error in chain, got: {err:?}"
         );
+    }
+
+    fn acl_error_of(err: &reqwest_middleware::Error) -> Option<&AclError> {
+        match err {
+            reqwest_middleware::Error::Middleware(e) => e.downcast_ref::<AclError>(),
+            _ => None,
+        }
+    }
+
+    #[tokio::test]
+    async fn non_default_port_blocked_by_middleware() {
+        let addr = spawn_server(http_200()).await;
+
+        let acl = Acl::new()
+            .deny_local_network()
+            .allow_cidr("127.0.0.1/32".parse().unwrap())
+            .deny_non_default_ports();
+        let inner = acl.configure(reqwest::Client::builder()).build().unwrap();
+        let client = acl.configure_middleware(ClientBuilder::new(inner)).build();
+
+        let url = format!("http://127.0.0.1:{}/", addr.port());
+        let err = client.get(&url).send().await.unwrap_err();
+        assert!(err.is_middleware(), "expected middleware error, got: {err}");
+        assert_eq!(acl_error_of(&err), Some(&AclError::DeniedPort(addr.port())));
+    }
+
+    #[tokio::test]
+    async fn allowed_port_passes_middleware_and_succeeds() {
+        let addr = spawn_server(http_200()).await;
+
+        let acl = Acl::new()
+            .deny_local_network()
+            .allow_cidr("127.0.0.1/32".parse().unwrap())
+            .deny_non_default_ports()
+            .allow_ports([addr.port()]);
+        let inner = acl.configure(reqwest::Client::builder()).build().unwrap();
+        let client = acl.configure_middleware(ClientBuilder::new(inner)).build();
+
+        let url = format!("http://localhost:{}/", addr.port());
+        let resp = client.get(&url).send().await.unwrap();
+        assert_eq!(resp.status(), 200);
     }
 }
