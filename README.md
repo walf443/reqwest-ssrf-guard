@@ -22,7 +22,9 @@ reqwest-ssrf-guard = { version = "0.1", features = ["middleware"] }
 use reqwest_ssrf_guard::Acl;
 use reqwest_middleware::ClientBuilder;
 
-let acl = Acl::new().deny_local_network();
+let acl = Acl::new()
+    .deny_local_network()
+    .deny_non_default_ports();
 
 let inner = acl.configure(reqwest::Client::builder()).build()?;   // resolver + redirect policy
 let client = acl
@@ -46,10 +48,12 @@ reaches the network without ever passing through the resolver:
 # async fn demo(url: reqwest::Url) -> Result<(), Box<dyn std::error::Error>> {
 use reqwest_ssrf_guard::Acl;
 
-let acl = Acl::new().deny_local_network();
+let acl = Acl::new()
+    .deny_local_network()
+    .deny_non_default_ports();
 let client = acl.configure(reqwest::Client::builder()).build()?; // resolver + redirect policy
 
-acl.validate_url(&url)?;                  // REQUIRED: rejects IP-literal hosts the resolver never sees
+acl.validate_url(&url)?;                  // REQUIRED: rejects IP-literal hosts and ports the resolver never sees
 let resp = client.get(url).send().await?;
 # let _ = resp;
 # Ok(())
@@ -63,6 +67,11 @@ metadata endpoints used by AWS / GCP / Azure / DigitalOcean / Oracle /
 Hetzner / IBM (all at `169.254.169.254`) and Alibaba Cloud
 (`100.100.100.200`). If every address returned for a hostname is denied,
 the request fails with `PermissionDenied`.
+
+`deny_non_default_ports()` rejects URLs with an explicit non-default port
+such as `http://example.com:6379/`, a common way to reach internal
+services. Add `allow_port(port)` if you need specific ports — see
+[Port rules](#port-rules).
 
 ## Customizing
 
