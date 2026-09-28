@@ -361,6 +361,12 @@ impl Acl {
         not(feature = "middleware"),
         doc = "`middleware` feature and apply `configure_middleware`."
     )]
+    ///
+    /// Proxies are left untouched. reqwest honours `HTTP_PROXY` /
+    /// `HTTPS_PROXY` by default, and a proxied request's target is resolved
+    /// by the proxy, not by this resolver, so the IP rules never apply to
+    /// domain names. Chain [`no_proxy`](reqwest::ClientBuilder::no_proxy)
+    /// unless the proxy enforces its own SSRF rules.
     pub fn configure(&self, builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
         builder
             .dns_resolver(std::sync::Arc::new(self.clone()))
