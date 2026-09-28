@@ -1134,6 +1134,10 @@ mod tests {
             Err(AclError::DeniedPort(80))
         );
         assert_eq!(
+            check(&acl, "http://example.com:443/"),
+            Err(AclError::DeniedPort(443))
+        );
+        assert_eq!(
             check(&acl, "http://1.1.1.1:6379/"),
             Err(AclError::DeniedPort(6379))
         );
