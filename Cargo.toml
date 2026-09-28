@@ -1,11 +1,13 @@
 [package]
 name = "reqwest-ssrf-guard"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
+rust-version = "1.87"
 description = "Mitigate SSRF and DNS rebinding in reqwest by filtering DNS results, redirects, and URL literals"
 keywords = ["reqwest", "ssrf", "dns-rebinding", "acl", "security"]
 categories = ["web-programming", "network-programming"]
 license = "MIT"
+repository = "https://github.com/walf443/reqwest-ssrf-guard"
 
 [features]
 default = []

@@ -65,3 +65,24 @@ jobs:
         run: cargo test --all-targets --features middleware
       - name: doc tests
         run: cargo test --doc --all-features
+
+  msrv:
+    name: MSRV (rust-version)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: read rust-version from Cargo.toml
+        id: msrv
+        run: echo "version=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+      # Cargo.lock is not committed; resolving with the MSRV toolchain lets
+      # the MSRV-aware resolver pick dependency versions it supports.
+      - name: test on MSRV
+        run: cargo test --all-targets --all-features
